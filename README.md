@@ -1,2 +1,192 @@
 # demo-neo4j-GraphRAG-py
 
+A reusable GraphRAG scaffold on Neo4j, built on the official
+[`neo4j-graphrag`](https://github.com/neo4j/neo4j-graphrag-python) package (v1.19).
+
+Point it at a folder of documents and a schema; get back a knowledge graph, five
+retrieval strategies, a terminal client, and an interactive browser explorer that
+answers questions **and shows you the subgraph the answer came from**.
+
+```
+projects/<name>/data/*.md ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_DOCUMENT]->(:Document)
+                                                   (:Entity)-[:FROM_CHUNK]->(:Chunk)
+                                                   (:Entity)-[:REL]->(:Entity)
+                                                          │
+                                                          ▼
+                                          HybridCypherRetriever ──► GraphRAG ──► answer
+                                                                            + evidence subgraph
+```
+
+## The split
+
+Everything in `src/graphrag_kit/` is domain-agnostic. Everything that makes a demo
+*about something* lives in a project package under `projects/`, selected by one
+environment variable:
+
+```bash
+GRAPHRAG_PROJECT=projects.example
+```
+
+A project is a single `ProjectSpec`: a schema, a data directory, extraction rules,
+few-shot Cypher, seed questions, and a palette. That is the whole contract — see
+[project.py](src/graphrag_kit/project.py). To start a new demo, copy
+`projects/example`, swap the schema and the corpus, and point the variable at it.
+No engine code changes.
+
+Branches in this repo follow that split: `main` is the scaffold plus a neutral
+example, and `vice-city` adds a real corpus on top of it.
+
+## Setup
+
+**1. A Neo4j instance.** Either start one locally:
+
+```bash
+docker compose up -d
+```
+
+or point `.env` at Aura. APOC is required — the entity resolver calls
+`apoc.refactor.mergeNodes`. It is bundled in the compose file and present on all
+Aura tiers.
+
+**2. Environment.**
+
+```bash
+cp .env.example .env
+```
+
+Fill in `OPENAI_API_KEY`, the `NEO4J_*` values, and `GRAPHRAG_PROJECT`.
+
+**3. Dependencies.**
+
+```bash
+uv sync
+```
+
+## Run
+
+```bash
+uv run graphrag-setup
+```
+
+Creates the vector index, two fulltext indexes and supporting range indexes, then
+blocks until all of them report `ONLINE`.
+
+```bash
+uv run graphrag-ingest
+```
+
+Chunks every document in the project's data directory, embeds each chunk, extracts
+entities and relationships under the project's schema, rolls up evidence levels,
+then merges duplicate entities.
+
+```bash
+uv run graphrag-serve
+```
+
+Opens the explorer on <http://localhost:8000>. Or stay in the terminal:
+
+```bash
+uv run graphrag-ask "who is connected to whom?"
+uv run graphrag-ask --retriever text2cypher "how many organizations are there?"
+uv run graphrag-ask --show-context --chat
+```
+
+## The explorer
+
+- **Ask a question** — the answer appears *and* the graph dims to just the
+  entities behind it, then zooms to them. Evidence levels in the answer are
+  colour-coded.
+- **Filter** by entity type or evidence level; counts come from the live graph.
+- **Click a node** for its properties and every connection, each one clickable.
+- **Search** runs against a fulltext index over entity names and descriptions.
+
+The renderer is a dependency-free canvas force layout. NVL is wired up too and
+available at `?renderer=nvl`, but it is not the default: it ships ESM-only, so it
+has to come from a CDN at runtime, which costs a ~10s cold load and puts a live
+demo at the mercy of someone else's uptime.
+
+## Retrievers
+
+`--retriever` on the CLI, or the dropdown in the explorer:
+
+| Retriever | Vector | Fulltext | Graph | Notes |
+|---|:---:|:---:|:---:|---|
+| `vector` | ✓ | — | — | Baseline. Chunks that *sound* like the question. |
+| `hybrid` | ✓ | ✓ | — | Recovers proper nouns that embeddings blur. |
+| `vector-cypher` | ✓ | — | ✓ | Graph expansion, no keyword matching. |
+| `hybrid-cypher` | ✓ | ✓ | ✓ | Default. |
+| `text2cypher` | — | — | ✓ | LLM writes Cypher. Handles counting and aggregation, which vector search cannot do at all. |
+
+The interesting code is `GRAPH_CONTEXT_QUERY` in
+[retrievers.py](src/graphrag_kit/retrievers.py) — the Cypher that runs *after* the
+vector/fulltext lookup and expands each matched chunk into its document, its
+entities, and those entities' own relationships. That second hop is the part a
+vector store cannot do.
+
+Two variables are injected into that fragment by the library and must not be
+re-declared: `node` (the matched `:Chunk`) and `score`. `score` must appear in the
+`RETURN`.
+
+## Evidence levels
+
+Every entity carries a `status`. The engine treats these as ordered,
+strongest-first, and the project names them (default: `confirmed`, `reported`,
+`rumored`). This lets the graph answer "what do we actually know?" as distinct
+from "what is being said?"
+
+Because an entity can be asserted at different levels in different documents, a
+rollup pass runs **before** entity resolution and writes the strongest observed
+level onto every duplicate, keeping the full observed set in `evidence_levels`.
+Without it, `apoc.refactor.mergeNodes` — which is called with
+`properties: 'discard'` — keeps whichever value it happens to hit first, and a
+court-documented fact can come out the far side marked as a rumour.
+
+## Starting over
+
+```bash
+uv run graphrag-reset --yes
+```
+
+Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
+`__KGBuilder__`) and drops its indexes. Safe against a database holding other data.
+
+## Notes and gotchas
+
+- **Embedding dimensions must match the model.** `text-embedding-3-small` is 1536,
+  `-3-large` is 3072. Changing `EMBEDDING_MODEL` after ingesting needs a
+  `graphrag-reset --yes` and a re-ingest, or the vector index rejects the writes.
+- **No uniqueness constraints on entity names.** `Neo4jWriter` inserts extracted
+  nodes with `CREATE`, not `MERGE`, and de-duplicates afterwards via the resolver.
+  A `Person.name IS UNIQUE` constraint aborts the ingest the first time a person
+  appears in two chunks.
+- **Indexes must be `ONLINE` before ingesting.** Embeddings written to an index
+  still populating are invisible to search, with no error. `graphrag-setup` polls.
+- **`.env` overrides the shell.** `load_dotenv(override=True)` is deliberate: a
+  stale `NEO4J_URI` exported in your shell otherwise shadows the project's `.env`
+  and points the demo at the wrong database without saying so.
+- **Components moved namespace in 1.19.** `neo4j_graphrag.experimental.components.*`
+  is deprecated for `neo4j_graphrag.components.*` and goes away in 2.0.
+  `SimpleKGPipeline` itself still lives under `experimental.pipeline`.
+- **Exact-match resolution only.** Fuzzy resolution is tempting but dangerous on
+  corpora with numbered entities — at the default threshold it merges "Trailer 1"
+  with "Trailer 2". Consistent naming is enforced in the extraction prompt instead.
+- **`Text2CypherRetriever` will not execute writes.** Generated Cypher is run
+  through `EXPLAIN` first and rejected if it writes, so a prompt-injected `DELETE`
+  never reaches the graph.
+
+## Layout
+
+```
+src/graphrag_kit/
+  project.py          ProjectSpec — the engine/corpus seam
+  config.py           env loading, driver / LLM / embedder factories
+  setup_indexes.py    indexes + ONLINE polling       -> graphrag-setup
+  ingest.py           SimpleKGPipeline + rollup      -> graphrag-ingest
+  retrievers.py       five retrievers, retrieval_query, RAG prompt
+  ask.py              terminal client                -> graphrag-ask
+  server.py           FastAPI + JSON API             -> graphrag-serve
+  reset.py            scoped teardown                -> graphrag-reset
+  static/             explorer front-end (no build step)
+projects/
+  example/            neutral sample corpus + schema
+```
