@@ -36,6 +36,11 @@ No engine code changes.
 Branches in this repo follow that split: `main` is the scaffold plus a neutral
 example, and `vice-city` adds a real corpus on top of it.
 
+> **This is the `vice-city` branch.** It adds
+> [`projects/vicecity`](projects/vicecity/README.md) — a POLE knowledge graph of
+> everything publicly known about Grand Theft Auto VI, where every fact is graded
+> confirmed / reported / rumored. See that README for the model and the corpus.
+
 ## Setup
 
 **1. A Neo4j instance.** Either start one locally:
@@ -189,4 +194,5 @@ src/graphrag_kit/
   static/             explorer front-end (no build step)
 projects/
   example/            neutral sample corpus + schema
+  vicecity/           GTA VI POLE corpus — see its README
 ```
