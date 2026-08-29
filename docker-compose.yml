@@ -1,0 +1,25 @@
+services:
+  neo4j:
+    image: neo4j:2025.10-community
+    container_name: graphrag-demo-neo4j
+    ports:
+      - "7474:7474"   # Browser
+      - "7687:7687"   # Bolt
+    environment:
+      NEO4J_AUTH: neo4j/graphrag-demo
+      NEO4J_ACCEPT_LICENSE_AGREEMENT: "yes"
+      # APOC is required: the entity resolver calls apoc.refactor.mergeNodes.
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_server_memory_heap_max__size: 2G
+      NEO4J_server_memory_pagecache_size: 1G
+    volumes:
+      - neo4j-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "cypher-shell -u neo4j -p graphrag-demo 'RETURN 1' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 20
+      start_period: 30s
+
+volumes:
+  neo4j-data:

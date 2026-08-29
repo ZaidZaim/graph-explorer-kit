@@ -1,0 +1,38 @@
+[project]
+name = "demo-neo4j-graphrag"
+version = "0.1.0"
+description = "End-to-end GraphRAG demo on Neo4j using the neo4j-graphrag Python package"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10,<3.15"
+dependencies = [
+    "neo4j-graphrag[openai,experimental]>=1.19.0",
+    "neo4j>=5.28.0",
+    "python-dotenv>=1.0.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.9.0",
+]
+
+[project.scripts]
+graphrag-setup = "graphrag_demo.setup_indexes:main"
+graphrag-ingest = "graphrag_demo.ingest:main"
+graphrag-ask = "graphrag_demo.ask:main"
+graphrag-compare = "graphrag_demo.compare:main"
+graphrag-reset = "graphrag_demo.reset:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/graphrag_demo"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
