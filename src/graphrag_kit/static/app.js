@@ -46,6 +46,10 @@ async function boot() {
       colors: state.meta.colors,
     });
 
+    syncInsets();
+    window.addEventListener('resize', syncInsets);
+    // Dev affordance: inspect layout state from the console.
+    window.__graphrag = { state, renderer: state.renderer };
     await refreshGraph();
     setLoading(null);
   } catch (err) {
@@ -63,6 +67,21 @@ function applyBranding() {
   $('brand-subtitle').textContent = state.meta.subtitle;
   const first = state.meta.examples?.[0];
   if (first) $('question').placeholder = `Ask the graph — e.g. ${first.toLowerCase()}`;
+}
+
+/** Tell the renderer which parts of the stage are covered by floating panels,
+ *  so fitting the graph does not centre it under the answer card. */
+function syncInsets() {
+  const stage = $('stage').getBoundingClientRect();
+  const answer = $('answer');
+  const askBar = $('ask-bar');
+  let left = 0;
+  if (!answer.hidden) {
+    const r = answer.getBoundingClientRect();
+    left = Math.max(0, r.right - stage.left + 16);
+  }
+  const bottom = askBar ? stage.bottom - askBar.getBoundingClientRect().top + 16 : 0;
+  state.renderer?.setInsets({ left, bottom: Math.max(0, bottom) });
 }
 
 function setLoading(text) {
@@ -235,6 +254,7 @@ async function askQuestion() {
   btn.disabled = true;
   btn.textContent = 'Thinking…';
   $('answer').hidden = false;
+    syncInsets();
   $('answer-body').textContent = 'Retrieving from the graph…';
   $('answer-context').innerHTML = '';
 
@@ -249,17 +269,17 @@ async function askQuestion() {
       }),
     });
 
-    $('answer-body').innerHTML = markEvidence(escapeHtml(res.answer));
+    $('answer-body').innerHTML = markEvidence(renderMarkdown(res.answer));
     $('answer-context').innerHTML = res.context.length
       ? res.context.map((c) => `<pre>${escapeHtml(c)}</pre>`).join('')
       : '<pre>(no context returned)</pre>';
 
-    const ids = new Set(res.subgraph.seeds ?? []);
+    // Unfold the evidence: the graph re-lays itself as a radial tree with the
+    // chunks that answered the question at the centre, opening ring by ring.
     if (res.subgraph.nodes.length) {
-      state.renderer.merge(res.subgraph);
-      state.renderer.highlight(ids);
+      state.renderer.unfold(res.subgraph);
     } else {
-      state.renderer.highlight(null);
+      state.renderer.collapse();
     }
   } catch (err) {
     console.error(err);
@@ -268,6 +288,36 @@ async function askQuestion() {
     btn.disabled = false;
     btn.textContent = 'Ask';
   }
+}
+
+/** Minimal markdown -> HTML. Models emit **bold**, `code` and bullet lists
+ *  whether or not you ask for prose; rendering literal asterisks looks broken.
+ *  Escapes first, so this never introduces markup from model output. */
+function renderMarkdown(text) {
+  const lines = escapeHtml(text).split('\n');
+  const out = [];
+  let inList = false;
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      if (!inList) { out.push('<ul>'); inList = true; }
+      out.push(`<li>${inline(bullet[1])}</li>`);
+      continue;
+    }
+    if (inList) { out.push('</ul>'); inList = false; }
+    if (!line.trim()) { out.push('<p class="gap"></p>'); continue; }
+    out.push(`<p>${inline(line)}</p>`);
+  }
+  if (inList) out.push('</ul>');
+  return out.join('');
+}
+
+function inline(s) {
+  return s
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
+    .replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
 /** Colour the evidence words the model is instructed to emit. */
@@ -317,9 +367,10 @@ function escapeHtml(value) {
 
 async function showTimeline() {
   const res = await api('/api/timeline');
-  const ids = new Set(res.nodes.map((n) => n.id));
-  state.renderer.highlight(ids);
+  const ids = res.nodes.map((n) => n.id);
+  state.renderer.unfold({ nodes: res.nodes, relationships: [], seeds: ids });
   $('answer').hidden = false;
+    syncInsets();
   $('answer-body').innerHTML = res.nodes
     .map((n) => `<strong>${escapeHtml(n.date)}</strong>  ${escapeHtml(n.name)}`)
     .join('\n');
@@ -332,13 +383,13 @@ function wireEvents() {
   $('close-details').addEventListener('click', hideDetails);
   $('close-answer').addEventListener('click', () => {
     $('answer').hidden = true;
-    state.renderer?.highlight(null);
+    syncInsets();
+    state.renderer?.collapse();
   });
   $('reset-view').addEventListener('click', async () => {
     $('answer').hidden = true;
-    state.renderer?.highlight(null);
+    syncInsets();
     await refreshGraph();
-    state.renderer?.fit();
   });
   $('show-timeline').addEventListener('click', showTimeline);
   document.addEventListener('keydown', (e) => {

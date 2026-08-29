@@ -29,6 +29,7 @@ from graphrag_kit.config import (
     ENTITY_FULLTEXT_INDEX_NAME,
     FULLTEXT_INDEX_NAME,
     VECTOR_INDEX_NAME,
+    describe_models,
     get_database,
     get_driver,
     get_embedder,
@@ -46,6 +47,7 @@ state: dict[str, Any] = {}
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     state["project"] = load_project()
+    print(f"models: {describe_models()}")
     state["driver"] = get_driver()
     state["database"] = get_database()
     state["embedder"] = get_embedder()

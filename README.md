@@ -48,15 +48,44 @@ or point `.env` at Aura. APOC is required — the entity resolver calls
 `apoc.refactor.mergeNodes`. It is bundled in the compose file and present on all
 Aura tiers.
 
-**2. Environment.**
+**2. Models.** Two providers, selected with `LLM_PROVIDER`:
+
+| | |
+|---|---|
+| `azure` *(default)* | Microsoft Foundry / Azure OpenAI. Authenticates with Entra ID via `DefaultAzureCredential` — an `az login` is enough and **no key is stored anywhere**. |
+| `openai` | `api.openai.com` with `OPENAI_API_KEY`. |
+
+Find your Foundry deployments:
+
+```bash
+az cognitiveservices account list -o table
+az cognitiveservices account deployment list -n <resource> -g <rg> -o table
+```
+
+You need one chat deployment and one embedding deployment. They may live on
+different resources — quota, region and model availability are all per-resource —
+so `AZURE_OPENAI_EMBEDDING_ENDPOINT` overrides the endpoint for embeddings only.
+
+Entra auth requires the **Cognitive Services OpenAI User** role on the resource.
+Set `AZURE_AUTH_MODE=key` with `AZURE_OPENAI_API_KEY` where there is no Azure
+identity (CI, for instance).
+
+Deploying a model, if you need one:
+
+```bash
+az cognitiveservices model list -l <region> --query "[?starts_with(model.name,'gpt-5')].{name:model.name, version:model.version}" -o table
+az cognitiveservices account deployment create -n <resource> -g <rg>   --deployment-name <name> --model-name <model> --model-version <version>   --model-format OpenAI --sku-name GlobalStandard --sku-capacity 500
+```
+
+**3. Environment.**
 
 ```bash
 cp .env.example .env
 ```
 
-Fill in `OPENAI_API_KEY`, the `NEO4J_*` values, and `GRAPHRAG_PROJECT`.
+Fill in `GRAPHRAG_PROJECT`, the `NEO4J_*` values, and the provider block.
 
-**3. Dependencies.**
+**4. Dependencies.**
 
 ```bash
 uv sync
@@ -152,9 +181,20 @@ Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
 
 ## Notes and gotchas
 
-- **Embedding dimensions must match the model.** `text-embedding-3-small` is 1536,
-  `-3-large` is 3072. Changing `EMBEDDING_MODEL` after ingesting needs a
-  `graphrag-reset --yes` and a re-ingest, or the vector index rejects the writes.
+- **Embedding dimensions must match the deployment.** `text-embedding-3-small` is
+  1536, `-3-large` is 3072. `EMBEDDING_DIMENSIONS` has to agree with whatever is
+  actually deployed; changing it after ingesting needs a `graphrag-reset --yes`
+  and a re-ingest, because the vector index is created at a fixed width.
+- **Temperature is opt-in.** Newer reasoning models (`gpt-5-mini` and friends)
+  reject any temperature other than their default and return HTTP 400, so nothing
+  is sent unless you set `LLM_TEMPERATURE`.
+- **Azure auth mode is explicit, not inferred.** `AZURE_AUTH_MODE` defaults to
+  `entra`. An ambient `AZURE_OPENAI_API_KEY` exported in your shell for some other
+  resource is deliberately ignored — preferring any key that happens to exist
+  sends resource A's key to resource B and surfaces as a 401 that reads like a
+  broken endpoint.
+- **On Azure, `model` is the deployment name**, not the model name. They are often
+  but not always the same string.
 - **No uniqueness constraints on entity names.** `Neo4jWriter` inserts extracted
   nodes with `CREATE`, not `MERGE`, and de-duplicates afterwards via the resolver.
   A `Person.name IS UNIQUE` constraint aborts the ingest the first time a person
