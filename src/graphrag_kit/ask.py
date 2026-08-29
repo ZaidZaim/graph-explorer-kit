@@ -15,12 +15,13 @@ from neo4j_graphrag.generation import GraphRAG
 from neo4j_graphrag.generation.prompts import RagTemplate
 from neo4j_graphrag.message_history import InMemoryMessageHistory
 
-from graphrag_kit.config import get_driver, get_llm
+from graphrag_kit.config import get_driver, get_llm, use_utf8_stdout
 from graphrag_kit.project import load_project
 from graphrag_kit.retrievers import RETRIEVERS, build_rag_prompt
 
 
 def main() -> int:
+    use_utf8_stdout()
     parser = argparse.ArgumentParser(description="Query the project knowledge graph.")
     parser.add_argument("question", nargs="*", help="The question to ask.")
     parser.add_argument(

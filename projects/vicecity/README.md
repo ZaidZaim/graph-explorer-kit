@@ -94,6 +94,22 @@ uv run graphrag-ask --retriever text2cypher "How many entities are only rumored?
 The last one is the case for having a graph at all: counting and aggregation are
 things vector search cannot do, and `text2cypher` answers it by writing Cypher.
 
+## How this graph was built
+
+The committed numbers below came from `gpt-5.6-sol` on Microsoft Foundry, with
+`text-embedding-3-small` (1536d) for vectors:
+
+| | |
+|---|---|
+| Documents / chunks | 9 / 38 |
+| Entities | 138 — Event 42, Object 31, Organization 26, Location 21, Person 18 |
+| Relationships | 170, led by INVOLVED_IN (103) |
+| Evidence | confirmed 105, reported 22, rumored 11 |
+
+Extraction quality tracks the model. The same corpus through `gpt-4.1-mini`
+produced ~100 entities and only 4 `PRECEDED_BY` edges, against 14 here — a
+noticeably weaker timeline.
+
 ## Known rough edges
 
 - Extraction is non-deterministic. Successive ingests of the same corpus produce

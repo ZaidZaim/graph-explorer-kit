@@ -25,7 +25,14 @@ from neo4j_graphrag.components.resolver import SinglePropertyExactMatchResolver
 from neo4j_graphrag.components.text_splitters.fixed_size_splitter import FixedSizeSplitter
 from neo4j_graphrag.experimental.pipeline.kg_builder import SimpleKGPipeline
 
-from graphrag_kit.config import get_database, get_driver, get_embedder, get_llm
+from graphrag_kit.config import (
+    describe_models,
+    get_database,
+    get_driver,
+    get_embedder,
+    get_llm,
+    use_utf8_stdout,
+)
 from graphrag_kit.project import ProjectSpec, load_project
 
 SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
@@ -198,6 +205,7 @@ def summarise(driver, database: str) -> None:
 
 
 def main() -> int:
+    use_utf8_stdout()
     spec = load_project()
     parser = argparse.ArgumentParser(description=f"Build the {spec.title} knowledge graph.")
     parser.add_argument("paths", nargs="*", type=Path, help="Files to ingest.")
@@ -214,6 +222,7 @@ def main() -> int:
         return 1
 
     print(f"project: {spec.key} ({len(paths)} documents)")
+    print(f"models:  {describe_models()}")
     asyncio.run(ingest(spec, paths, resolve_entities=not args.no_resolve))
     return 0
 

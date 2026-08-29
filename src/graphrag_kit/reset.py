@@ -13,6 +13,7 @@ from graphrag_kit.config import (
     VECTOR_INDEX_NAME,
     get_database,
     get_driver,
+    use_utf8_stdout,
 )
 
 # Only labels this demo writes. A bare `MATCH (n) DETACH DELETE n` would take out
@@ -22,6 +23,7 @@ RANGE_INDEX_NAMES = ["entity_name", "entity_status", "document_path"]
 
 
 def main() -> int:
+    use_utf8_stdout()
     parser = argparse.ArgumentParser(description="Delete the project graph.")
     parser.add_argument("--yes", action="store_true", help="Confirm the deletion.")
     parser.add_argument("--keep-indexes", action="store_true", help="Delete data, keep indexes.")

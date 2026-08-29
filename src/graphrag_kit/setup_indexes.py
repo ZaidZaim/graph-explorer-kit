@@ -25,8 +25,10 @@ from graphrag_kit.config import (
     ENTITY_FULLTEXT_INDEX_NAME,
     FULLTEXT_INDEX_NAME,
     VECTOR_INDEX_NAME,
+    describe_models,
     get_database,
     get_driver,
+    use_utf8_stdout,
 )
 
 RANGE_INDEXES = [
@@ -57,6 +59,8 @@ def wait_until_online(driver: neo4j.Driver, database: str, timeout_s: int = 180)
 
 
 def main() -> int:
+    use_utf8_stdout()
+    print(f"models: {describe_models()}")
     driver = get_driver()
     database = get_database()
     try:
