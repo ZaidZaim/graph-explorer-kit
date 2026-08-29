@@ -1,13 +1,12 @@
 """Create indexes, then wait until every index is ONLINE.
 
-Run this once before ingesting. Writing embeddings before the vector index is
-ONLINE silently produces a graph that vector search cannot see.
+Run once before ingesting. Embeddings written while the vector index is still
+populating are invisible to search, and nothing errors to tell you.
 
-Note on constraints: `Neo4jWriter` inserts extracted nodes with `CREATE`, not
-`MERGE`, and de-duplicates afterwards via `SinglePropertyExactMatchResolver`. A
-uniqueness constraint on e.g. `Person.name` would therefore abort ingestion the
-first time a person is mentioned in two chunks. Plain range indexes give the
-lookup speed without the write-time rejection.
+No uniqueness constraints on entity names: `Neo4jWriter` inserts extracted nodes
+with `CREATE`, not `MERGE`, and de-duplicates afterwards via the resolver. A
+`Person.name IS UNIQUE` constraint would abort ingestion the first time a person
+is mentioned in two chunks.
 """
 
 from __future__ import annotations
@@ -18,11 +17,12 @@ import time
 import neo4j
 from neo4j_graphrag.indexes import create_fulltext_index, create_vector_index
 
-from graphrag_demo.config import (
+from graphrag_kit.config import (
     CHUNK_EMBEDDING_PROPERTY,
     CHUNK_LABEL,
     CHUNK_TEXT_PROPERTY,
     EMBEDDING_DIMENSIONS,
+    ENTITY_FULLTEXT_INDEX_NAME,
     FULLTEXT_INDEX_NAME,
     VECTOR_INDEX_NAME,
     get_database,
@@ -31,15 +31,14 @@ from graphrag_demo.config import (
 
 RANGE_INDEXES = [
     # Every extracted entity carries the reserved :__Entity__ label, so one index
-    # here serves Person, Organization, Product, Technology and Location lookups
-    # and speeds up the entity-resolution merge.
+    # serves every schema label and speeds up entity resolution.
     ("entity_name", "CREATE INDEX entity_name IF NOT EXISTS FOR (n:__Entity__) ON (n.name)"),
+    ("entity_status", "CREATE INDEX entity_status IF NOT EXISTS FOR (n:__Entity__) ON (n.status)"),
     ("document_path", "CREATE INDEX document_path IF NOT EXISTS FOR (d:Document) ON (d.path)"),
-    ("chunk_index", "CREATE INDEX chunk_index IF NOT EXISTS FOR (c:Chunk) ON (c.index)"),
 ]
 
 
-def wait_until_online(driver: neo4j.Driver, database: str, timeout_s: int = 120) -> None:
+def wait_until_online(driver: neo4j.Driver, database: str, timeout_s: int = 180) -> None:
     """Poll SHOW INDEXES until nothing is left in a non-ONLINE state."""
     deadline = time.monotonic() + timeout_s
     while True:
@@ -84,6 +83,16 @@ def main() -> int:
             neo4j_database=database,
         )
         print(f"fulltext    {FULLTEXT_INDEX_NAME} (on {CHUNK_LABEL}.{CHUNK_TEXT_PROPERTY})")
+
+        # Used by the explorer's entity search box, not by GraphRAG retrieval.
+        create_fulltext_index(
+            driver,
+            name=ENTITY_FULLTEXT_INDEX_NAME,
+            label="__Entity__",
+            node_properties=["name", "description"],
+            neo4j_database=database,
+        )
+        print(f"fulltext    {ENTITY_FULLTEXT_INDEX_NAME} (on __Entity__.name, .description)")
 
         wait_until_online(driver, database)
     finally:

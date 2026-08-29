@@ -1,0 +1,274 @@
+/* Vice City palette: neon on dusk. Dark-only by design — this is a presentation
+   surface, not a document, and the graph canvas reads badly on light ground. */
+:root {
+  --bg:        #120b1e;
+  --bg-2:      #1b1030;
+  --panel:     rgba(28, 16, 48, 0.86);
+  --edge:      rgba(255, 255, 255, 0.10);
+  --text:      #f2e9ff;
+  --muted:     #a897c4;
+  --pink:      #ff4d9d;
+  --cyan:      #2bd9c4;
+  --violet:    #9b7bff;
+  --amber:     #ffc857;
+  --blue:      #5aa9ff;
+  --confirmed: #2bd9c4;
+  --reported:  #ffc857;
+  --rumored:   #ff5a6e;
+  --radius:    12px;
+  --font:      "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono:      "JetBrains Mono", "Cascadia Code", ui-monospace, monospace;
+}
+
+* { box-sizing: border-box; }
+
+/* Must come before any rule that sets `display` on a hideable element: the UA
+   sheet's `[hidden] { display: none }` loses to a class rule like
+   `.overlay { display: flex }`, so hidden overlays would stay on screen. */
+[hidden] { display: none !important; }
+
+html, body {
+  margin: 0; height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font);
+  overflow: hidden;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: 300px 1fr;
+  height: 100vh;
+}
+#app.with-details { grid-template-columns: 300px 1fr 340px; }
+
+/* ---------- sidebar ---------- */
+
+#sidebar {
+  background: linear-gradient(180deg, var(--bg-2), var(--bg));
+  border-right: 1px solid var(--edge);
+  overflow-y: auto;
+  padding: 20px 18px 12px;
+  display: flex; flex-direction: column; gap: 20px;
+}
+
+.brand h1 {
+  margin: 0;
+  font-size: 26px; letter-spacing: 5px; font-weight: 800;
+  background: linear-gradient(92deg, var(--pink), var(--cyan));
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.brand p { margin: 4px 0 0; font-size: 11.5px; color: var(--muted); letter-spacing: .3px; }
+
+.panel h2 {
+  margin: 0 0 10px; font-size: 11px; text-transform: uppercase;
+  letter-spacing: 1.4px; color: var(--muted); font-weight: 600;
+  display: flex; justify-content: space-between; align-items: baseline; gap: 8px;
+}
+.hint { font-size: 9.5px; letter-spacing: .4px; opacity: .65; text-transform: none; }
+
+.field { display: block; }
+.field > span {
+  display: block; margin-bottom: 6px; font-size: 11px;
+  text-transform: uppercase; letter-spacing: 1.4px; color: var(--muted);
+}
+input[type="search"], input[type="text"], select {
+  width: 100%; padding: 9px 11px;
+  background: rgba(0,0,0,.32);
+  border: 1px solid var(--edge); border-radius: 9px;
+  color: var(--text); font-family: var(--font); font-size: 13px;
+}
+input:focus, select:focus { outline: 2px solid var(--pink); outline-offset: -1px; }
+
+.results {
+  list-style: none; margin: 8px 0 0; padding: 0;
+  max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--edge); border-radius: 9px;
+}
+.results li {
+  padding: 7px 10px; cursor: pointer; font-size: 12.5px;
+  display: flex; align-items: center; gap: 8px;
+  border-bottom: 1px solid rgba(255,255,255,.05);
+}
+.results li:last-child { border-bottom: 0; }
+.results li:hover { background: rgba(255,77,157,.16); }
+
+.filters { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.filters li {
+  display: flex; align-items: center; gap: 9px;
+  padding: 6px 9px; border-radius: 8px; cursor: pointer;
+  font-size: 12.5px; user-select: none;
+  border: 1px solid transparent;
+  transition: background .12s, border-color .12s;
+}
+.filters li:hover { background: rgba(255,255,255,.05); }
+.filters li.off { opacity: .38; }
+.filters li.off .swatch { background: transparent !important; }
+.filters .swatch {
+  width: 11px; height: 11px; border-radius: 3px; flex: 0 0 auto;
+  border: 1.5px solid currentColor;
+}
+.filters .count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--muted); }
+
+.stats { margin: 0; display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; font-size: 12.5px; }
+.stats dt { color: var(--muted); }
+.stats dd { margin: 0; font-family: var(--mono); text-align: right; }
+
+.foot { margin-top: auto; display: flex; gap: 8px; }
+
+button {
+  font-family: var(--font); font-size: 13px; cursor: pointer;
+  border-radius: 9px; border: 1px solid var(--edge);
+  padding: 9px 14px;
+  background: linear-gradient(96deg, var(--pink), #ff7ab8);
+  color: #1a0a14; font-weight: 650;
+}
+button:hover { filter: brightness(1.08); }
+button:disabled { opacity: .5; cursor: progress; }
+button.ghost {
+  background: rgba(255,255,255,.05); color: var(--text); font-weight: 500; flex: 1;
+}
+button.ghost:hover { background: rgba(255,255,255,.11); }
+button.small { padding: 4px 9px; font-size: 11px; flex: 0 0 auto; }
+
+/* ---------- stage ---------- */
+
+#stage { position: relative; overflow: hidden; }
+#graph { position: absolute; inset: 0; }
+
+.overlay {
+  position: absolute; inset: 0; z-index: 5;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; background: rgba(18,11,30,.82); color: var(--muted); font-size: 13px;
+}
+.spinner {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 3px solid rgba(255,255,255,.13); border-top-color: var(--pink);
+  animation: spin .8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---------- ask bar ---------- */
+
+#ask-bar {
+  position: absolute; z-index: 6; left: 50%; transform: translateX(-50%);
+  bottom: 22px; width: min(760px, calc(100% - 44px));
+}
+#ask-form { display: flex; gap: 8px; }
+#ask-form input {
+  flex: 1;
+  background: var(--panel);
+  backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,.14);
+  box-shadow: 0 12px 34px rgba(0,0,0,.5);
+  padding: 13px 16px; font-size: 14px; border-radius: 11px;
+}
+#ask-form select {
+  width: auto; background: var(--panel); backdrop-filter: blur(14px);
+  border-radius: 11px; font-size: 12px; padding: 0 10px;
+}
+
+.examples { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 9px; justify-content: center; }
+.examples button {
+  background: rgba(28,16,48,.8); backdrop-filter: blur(10px);
+  color: var(--muted); font-weight: 500; font-size: 11.5px;
+  padding: 5px 11px; border-radius: 999px;
+}
+.examples button:hover { color: var(--text); border-color: var(--pink); }
+
+/* ---------- answer ---------- */
+
+.answer {
+  position: absolute; z-index: 7; left: 22px; top: 22px;
+  width: min(430px, calc(100% - 44px)); max-height: calc(100% - 190px);
+  overflow-y: auto;
+  background: var(--panel); backdrop-filter: blur(16px);
+  border: 1px solid rgba(255,255,255,.14); border-radius: var(--radius);
+  box-shadow: 0 16px 44px rgba(0,0,0,.55);
+  padding: 16px 18px;
+}
+.answer header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+.answer h2 {
+  margin: 0; font-size: 11px; letter-spacing: 1.6px;
+  text-transform: uppercase; color: var(--pink);
+}
+#answer-body { font-size: 13.5px; line-height: 1.62; white-space: pre-wrap; }
+#answer-body .ev { font-weight: 650; }
+#answer-body .ev-confirmed { color: var(--confirmed); }
+#answer-body .ev-reported  { color: var(--reported); }
+#answer-body .ev-rumored   { color: var(--rumored); }
+
+#context-details { margin-top: 12px; }
+#context-details summary {
+  cursor: pointer; font-size: 11px; letter-spacing: 1.2px;
+  text-transform: uppercase; color: var(--muted);
+}
+#answer-context { margin-top: 8px; display: flex; flex-direction: column; gap: 8px; }
+#answer-context pre {
+  margin: 0; padding: 9px 10px; font-family: var(--mono); font-size: 10.5px;
+  line-height: 1.5; white-space: pre-wrap; word-break: break-word;
+  background: rgba(0,0,0,.34); border-radius: 8px; color: var(--muted);
+  max-height: 190px; overflow-y: auto;
+}
+
+/* ---------- details ---------- */
+
+#details {
+  background: linear-gradient(180deg, var(--bg-2), var(--bg));
+  border-left: 1px solid var(--edge);
+  padding: 20px 18px; overflow-y: auto;
+}
+#details header { display: flex; justify-content: space-between; align-items: center; }
+#details h2 { margin: 12px 0 6px; font-size: 19px; line-height: 1.25; }
+#details h3 {
+  margin: 20px 0 8px; font-size: 11px; letter-spacing: 1.4px;
+  text-transform: uppercase; color: var(--muted);
+}
+.pill {
+  display: inline-block; padding: 3px 10px; border-radius: 999px;
+  font-size: 10.5px; letter-spacing: 1.2px; text-transform: uppercase; font-weight: 700;
+  color: #170d24;
+}
+.evidence { margin: 0 0 10px; font-size: 11.5px; letter-spacing: .8px; text-transform: uppercase; }
+.evidence.confirmed { color: var(--confirmed); }
+.evidence.reported  { color: var(--reported); }
+.evidence.rumored   { color: var(--rumored); }
+#detail-description { font-size: 13px; line-height: 1.6; color: #ddd0f0; }
+
+.props { display: grid; grid-template-columns: auto 1fr; gap: 5px 12px; margin: 14px 0 0; font-size: 12.5px; }
+.props dt { color: var(--muted); }
+.props dd { margin: 0; word-break: break-word; }
+
+.rels { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
+.rels li {
+  font-size: 12.5px; padding: 8px 10px; border-radius: 8px;
+  background: rgba(255,255,255,.045); cursor: pointer; line-height: 1.45;
+}
+.rels li:hover { background: rgba(255,77,157,.17); }
+.rels .rel-type {
+  font-family: var(--mono); font-size: 10px; color: var(--cyan);
+  letter-spacing: .4px; display: block; margin-bottom: 2px;
+}
+.rels .dir { color: var(--muted); }
+
+/* Below this width a third grid column squeezes the stage until the answer
+   panel is a letter-wide ribbon. Float the details panel over the graph
+   instead and give the canvas its full width back. */
+@media (max-width: 1180px) {
+  #app.with-details { grid-template-columns: 300px 1fr; }
+  #details {
+    position: fixed; top: 0; right: 0; bottom: 0; width: 340px; z-index: 9;
+    box-shadow: -18px 0 44px rgba(0,0,0,.55);
+  }
+}
+
+@media (max-width: 900px) {
+  #app, #app.with-details { grid-template-columns: 1fr; }
+  #sidebar {
+    position: fixed; inset: 0 auto 0 0; width: 270px; z-index: 8;
+    transform: translateX(-100%); transition: transform .2s;
+  }
+  #sidebar:focus-within, #sidebar:hover { transform: none; }
+  #details { width: min(340px, 100%); }
+  .answer { width: calc(100% - 44px); max-height: 42%; }
+}

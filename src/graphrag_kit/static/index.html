@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Knowledge Graph Explorer</title>
+<link rel="stylesheet" href="/static/styles.css?v=2" />
+</head>
+<body>
+<div id="app">
+
+  <aside id="sidebar">
+    <header class="brand">
+      <h1 id="brand-title">&nbsp;</h1>
+      <p id="brand-subtitle">&nbsp;</p>
+    </header>
+
+    <section class="panel">
+      <label class="field">
+        <span>Search entities</span>
+        <input id="search" type="search" placeholder="Search the graph&hellip;" autocomplete="off" />
+      </label>
+      <ul id="search-results" class="results" hidden></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Entities <span class="hint">click to filter</span></h2>
+      <ul id="label-filters" class="filters"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Evidence <span class="hint">what we actually know</span></h2>
+      <ul id="status-filters" class="filters"></ul>
+    </section>
+
+    <section class="panel">
+      <h2>Corpus</h2>
+      <dl id="stats" class="stats"></dl>
+    </section>
+
+    <footer class="panel foot">
+      <button id="reset-view" class="ghost">Reset view</button>
+      <button id="show-timeline" class="ghost">Timeline</button>
+    </footer>
+  </aside>
+
+  <main id="stage">
+    <div id="graph"></div>
+
+    <div id="graph-empty" class="overlay" hidden>
+      <p>No nodes match these filters.</p>
+    </div>
+
+    <div id="loading" class="overlay">
+      <div class="spinner"></div>
+      <p id="loading-text">Connecting to Aura&hellip;</p>
+    </div>
+
+    <div id="ask-bar">
+      <form id="ask-form">
+        <input id="question" type="text" autocomplete="off"
+               placeholder="Ask the graph&hellip;" />
+        <select id="retriever" title="Retrieval strategy"></select>
+        <button type="submit" id="ask-button">Ask</button>
+      </form>
+      <div id="examples" class="examples"></div>
+    </div>
+
+    <section id="answer" class="answer" hidden>
+      <header>
+        <h2>Answer</h2>
+        <button id="close-answer" class="ghost small">close</button>
+      </header>
+      <div id="answer-body"></div>
+      <details id="context-details">
+        <summary>Retrieved context</summary>
+        <div id="answer-context"></div>
+      </details>
+    </section>
+  </main>
+
+  <aside id="details" hidden>
+    <header>
+      <span id="detail-label" class="pill"></span>
+      <button id="close-details" class="ghost small">close</button>
+    </header>
+    <h2 id="detail-name"></h2>
+    <p id="detail-status" class="evidence"></p>
+    <p id="detail-description"></p>
+    <dl id="detail-props" class="props"></dl>
+    <h3>Connections</h3>
+    <ul id="detail-rels" class="rels"></ul>
+  </aside>
+
+</div>
+<script type="module" src="/static/app.js?v=2"></script>
+</body>
+</html>
