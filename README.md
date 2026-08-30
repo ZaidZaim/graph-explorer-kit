@@ -213,8 +213,8 @@ Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
   is deprecated for `neo4j_graphrag.components.*` and goes away in 2.0.
   `SimpleKGPipeline` itself still lives under `experimental.pipeline`.
 - **Exact-match resolution only.** Fuzzy resolution is tempting but dangerous on
-  corpora with numbered entities — at the default threshold it merges "Trailer 1"
-  with "Trailer 2". Consistent naming is enforced in the extraction prompt instead.
+  corpora with numbered entities — at the default threshold it merges "Phase 1"
+  with "Phase 2". Consistent naming is enforced in the extraction prompt instead.
 - **`Text2CypherRetriever` will not execute writes.** Generated Cypher is run
   through `EXPLAIN` first and rejected if it writes, so a prompt-injected `DELETE`
   never reaches the graph.
