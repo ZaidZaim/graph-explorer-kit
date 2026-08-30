@@ -5,13 +5,21 @@
  * choice but ships ESM-only, so it has to come from a CDN at runtime, which
  * costs a ~10s cold load and cannot drive the unfold.
  *
+ * The unfold is staged, not one burst. /api/ask/stream sends a ring per
+ * pipeline stage, and each one is added as it lands, so the picture grows in
+ * the order the answer was actually reasoned out:
+ *
+ *     ( passage ) ──▶ ( entity ) ──▶ ( neighbour )
+ *
  * Public surface:
- *   setGraph({nodes, relationships})   replace the graph
- *   unfold({nodes, relationships, seeds})  reveal an answer's evidence
- *   collapse()                         return to the whole graph
- *   select(id | null)                  mark one node as selected
- *   focus(id)                          ease the view onto a node
- *   fit()                              zoom to fit
+ *   setGraph({nodes, relationships})       replace the graph
+ *   beginUnfold()                          ghost the graph, ready for stage one
+ *   addStage({nodes, relationships, stage}) reveal one more ring
+ *   unfold({nodes, relationships})         begin + one stage, for one-shot views
+ *   collapse()                             return to the whole graph
+ *   select(id | null)                      mark one node as selected
+ *   focus(id)                              ease the view onto a node
+ *   fit()                                  zoom to fit
  */
 
 const NVL_URL = 'https://esm.sh/@neo4j-nvl/base@1.2.1';
@@ -19,16 +27,29 @@ const NVL_INTERACTIONS_URL = 'https://esm.sh/@neo4j-nvl/interaction-handlers@1.2
 
 const STATUS_RING = { confirmed: '#2bd9c4', reported: '#ffc857', rumored: '#ff5a6e' };
 
-// Unfold timing, milliseconds.
-const RING_STAGGER = 190;   // delay added per depth ring
-const NODE_FADE = 460;      // how long a node takes to arrive
-const EDGE_DRAW = 340;      // how long an edge takes to draw itself
-const RING_RADIUS = 190;    // minimum distance between depth rings
-const NODE_ARC = 128;       // arc length each node needs on its ring, for labels
-const RING_GAP = 150;       // minimum gap between consecutive rings
-const GHOST_ALPHA = 0.09;   // what the rest of the graph fades to
+const CHUNK_RING = 'rgba(255,255,255,0.34)';
 
-const EDGE_BOW = 0.18;      // how far an edge bows away from a straight chord
+// Unfold timing, milliseconds.
+const NODE_FADE = 520;      // how long a node takes to arrive
+const NODE_POP = 38;        // stagger between siblings arriving in one stage
+const EDGE_DRAW = 380;      // how long an edge takes to draw itself
+const GHOST_ALPHA = 0.07;   // what the rest of the graph fades to
+
+// Fan geometry. The tree is rooted at the retrieved passages and opens to the
+// right, so the picture reads the way the pipeline ran: what the question
+// matched, then the entities in it, then what the graph reasoned over.
+const FAN_SPREAD = Math.PI * 0.86;  // total angle the whole tree occupies
+const RING_RADIUS = 190;    // nominal distance between depth rings
+const RING_GAP = 150;       // minimum gap between consecutive rings
+const NODE_ARC = 88;        // arc length each node needs, so labels do not collide
+// A crowded ring is laid out as two interleaved rows rather than one enormous
+// circle: it halves the radius the ring needs, which is the difference between
+// a readable fan and a distant smudge.
+const CROWDED = 14;         // nodes on a ring before it splits into two rows
+const ROW_STAGGER = 46;     // radial offset between the two rows
+const MIN_NODE_PX = 6;      // never let a node shrink below this on screen
+
+const EDGE_BOW = 0.10;      // how far an edge bows away from a straight chord
 
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -49,7 +70,7 @@ export async function createRenderer(container, opts) {
 }
 
 /* =======================================================================
-   Canvas — force-directed, with a radial unfold
+   Canvas — force-directed at rest, a rooted fan while unfolding
    ======================================================================= */
 
 function createCanvasRenderer(container, opts) {
@@ -65,7 +86,7 @@ function createCanvasRenderer(container, opts) {
 
   // Unfold state. `revealed` null means "showing the whole graph".
   let revealed = null;        // Set<id>
-  let unfoldStart = 0;
+  let stageOf = new Map();    // id -> the stage that introduced it
 
   const view = { scale: 0.9, x: 0, y: 0 };
   const camera = { scale: 0.9, x: 0, y: 0, active: false };
@@ -131,13 +152,14 @@ function createCanvasRenderer(container, opts) {
   function animate(now, dt) {
     for (const n of nodes) {
       if (n.pinned && n.tx !== undefined) {
-        // Each ring starts moving after the one inside it, so the graph opens
-        // outward rather than everything sliding at once.
-        const t = clamp01((now - unfoldStart - n.depth * RING_STAGGER) / NODE_FADE);
+        // Every node carries its own start time, stamped by the stage that
+        // introduced it — so a later stage can slide the earlier rings to their
+        // new places without restarting their fade-in.
+        const t = clamp01((now - n.animStart) / NODE_FADE);
         const e = easeInOutCubic(t);
         n.x = n.fx + (n.tx - n.fx) * e;
         n.y = n.fy + (n.ty - n.fy) * e;
-        n.appear = easeOutCubic(t);
+        n.appear = n.animFrom + (1 - n.animFrom) * easeOutCubic(t);
       } else {
         const target = n.targetAppear ?? 1;
         n.appear += (target - n.appear) * rate(0.09, dt);
@@ -147,8 +169,7 @@ function createCanvasRenderer(container, opts) {
       const a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) continue;
       if (e.revealed) {
-        const startAt = unfoldStart + (Math.max(a.depth ?? 0, b.depth ?? 0)) * RING_STAGGER + NODE_FADE * 0.55;
-        e.grow = clamp01((now - startAt) / EDGE_DRAW);
+        e.grow = clamp01((now - (e.animStart ?? 0)) / EDGE_DRAW);
       } else {
         const target = revealed ? 0 : 1;
         e.grow += (target - e.grow) * rate(0.09, dt);
@@ -190,10 +211,17 @@ function createCanvasRenderer(container, opts) {
     if (now - lastFrame > 200) step(now);
   }, 120);
 
-  /* ---- unfold ---- */
+  /* ---- unfold layout ---- */
 
-  /** BFS from the seeds, then place each ring in its parent's angular sector. */
-  function radialLayout(ids, seedIds) {
+  /** Lay the revealed nodes out as a fan rooted at the question.
+   *
+   *  Depth comes from the stage that delivered a node, not from a walk of the
+   *  edges, so the rings are exactly ask / passages / entities / neighbourhood
+   *  even when an entity-to-entity edge would short-circuit the walk. A node's
+   *  parent is the least-loaded neighbour one ring in, which stops the fan
+   *  bunching everything under whichever passage happened to arrive first.
+   */
+  function flowLayout(ids) {
     const inSet = new Set(ids);
     const adj = new Map(ids.map((id) => [id, []]));
     for (const e of edges) {
@@ -202,27 +230,44 @@ function createCanvasRenderer(container, opts) {
         adj.get(e.to).push(e.from);
       }
     }
-    const seeds = seedIds.filter((id) => inSet.has(id));
-    const roots = seeds.length ? seeds : ids.slice(0, 1);
 
     const depth = new Map();
+    for (const id of ids) depth.set(id, stageOf.get(id) ?? 1);
+
+    const byDepth = new Map();
+    for (const id of ids) {
+      const d = depth.get(id);
+      if (!byDepth.has(d)) byDepth.set(d, []);
+      byDepth.get(d).push(id);
+    }
+    const depths = [...byDepth.keys()].sort((a, b) => a - b);
+    const roots = byDepth.get(depths[0]);
+
+    // Parent assignment, ring by ring outward.
     const children = new Map(ids.map((id) => [id, []]));
-    const queue = [];
-    for (const r of roots) { depth.set(r, 0); queue.push(r); }
-    // Any node the seeds cannot reach still gets placed, on an outer ring.
-    for (let i = 0; i < queue.length; i++) {
-      const cur = queue[i];
-      for (const nb of adj.get(cur) ?? []) {
-        if (!depth.has(nb)) {
-          depth.set(nb, depth.get(cur) + 1);
-          children.get(cur).push(nb);
-          queue.push(nb);
-        }
+    const parent = new Map();
+    const leastLoaded = (candidates) =>
+      candidates.reduce((best, o) =>
+        (children.get(o).length < children.get(best).length ? o : best));
+
+    for (const d of depths.slice(1)) {
+      let inner = [];
+      for (const prev of depths) {
+        if (prev >= d) break;
+        inner = byDepth.get(prev);
+      }
+      for (const id of byDepth.get(d)) {
+        const linked = (adj.get(id) ?? []).filter((o) => depth.get(o) < d);
+        // No edge to an inner ring means the retrieval reached it some other
+        // way; hang it off the emptiest inner node rather than dropping it.
+        const par = linked.length ? leastLoaded(linked)
+                  : inner.length ? leastLoaded(inner)
+                  : roots[0];
+        if (par === undefined || par === id) continue;
+        parent.set(id, par);
+        children.get(par).push(id);
       }
     }
-    const orphans = ids.filter((id) => !depth.has(id));
-    const maxDepth = Math.max(0, ...[...depth.values()]);
-    orphans.forEach((id) => depth.set(id, maxDepth + 1));
 
     // Leaf-count weighting keeps dense branches from overlapping thin ones.
     const weight = new Map();
@@ -234,27 +279,39 @@ function createCanvasRenderer(container, opts) {
     };
     roots.forEach(weigh);
 
-    // A ring holding N nodes needs circumference N*NODE_ARC, otherwise the
-    // labels collide. Thirty seeds on a nominal inner ring is the common case
-    // and looks like a single blob without this.
-    const ringCount = new Map();
-    for (const d of depth.values()) ringCount.set(d, (ringCount.get(d) ?? 0) + 1);
+    // A ring holding N nodes across FAN_SPREAD radians needs N*NODE_ARC of arc
+    // length, or the labels collide. Thirty entities on a nominal ring is the
+    // common case and reads as one blob without this.
     const ringR = new Map();
+    const ringRows = new Map();
     let previous = 0;
-    for (const d of [...ringCount.keys()].sort((a, b) => a - b)) {
-      const needed = (ringCount.get(d) * NODE_ARC) / (Math.PI * 2);
-      const nominal = d === 0 ? 0 : previous + RING_GAP;
-      const r = d === 0 && ringCount.get(0) === 1 ? 0 : Math.max(nominal, needed, d * RING_RADIUS);
+    for (const d of depths) {
+      const count = byDepth.get(d).length;
+      const rows = count > CROWDED ? 2 : 1;
+      const needed = (count * NODE_ARC) / (FAN_SPREAD * rows);
+      const isHub = d === depths[0] && count === 1;
+      const r = isHub
+        ? 0
+        : Math.max(previous + RING_GAP, (d - depths[0]) * RING_RADIUS, needed);
       ringR.set(d, r);
-      previous = r;
+      ringRows.set(d, rows);
+      previous = r + (rows > 1 ? ROW_STAGGER : 0);
     }
 
     const pos = new Map();
+    const placedInRing = new Map(depths.map((d) => [d, 0]));
     const place = (id, a0, a1) => {
       const d = depth.get(id);
       const mid = (a0 + a1) / 2;
-      const r = ringR.get(d) ?? d * RING_RADIUS;
+      const i = placedInRing.get(d) ?? 0;
+      placedInRing.set(d, i + 1);
+      // Siblings are placed consecutively, so alternating the radius puts
+      // angular neighbours on different rows without disturbing the order.
+      const base = ringR.get(d) ?? 0;
+      const offset = ringRows.get(d) > 1 ? (i % 2 ? ROW_STAGGER : -ROW_STAGGER) : 0;
+      const r = base > 0 ? base + offset : 0;
       pos.set(id, { x: Math.cos(mid) * r, y: Math.sin(mid) * r });
+
       const kids = children.get(id) ?? [];
       const total = kids.reduce((s, c) => s + (weight.get(c) ?? 1), 0) || 1;
       let a = a0;
@@ -264,23 +321,23 @@ function createCanvasRenderer(container, opts) {
         a += span;
       }
     };
+
     // Root sectors are weighted too: an even split starves a root carrying a
     // large subtree while a leaf root wastes its slice.
     const rootTotal = roots.reduce((s, r) => s + (weight.get(r) ?? 1), 0) || 1;
-    let angle = 0;
+    let angle = -FAN_SPREAD / 2;
     for (const r of roots) {
-      const span = ((Math.PI * 2) * (weight.get(r) ?? 1)) / rootTotal;
+      const span = (FAN_SPREAD * (weight.get(r) ?? 1)) / rootTotal;
       place(r, angle, angle + span);
       angle += span;
     }
-
-    orphans.forEach((id, i) => {
-      const ang = (i / Math.max(1, orphans.length)) * Math.PI * 2;
-      const r = ringR.get(maxDepth + 1) ?? (maxDepth + 1) * RING_RADIUS;
-      pos.set(id, { x: Math.cos(ang) * r, y: Math.sin(ang) * r });
-    });
-    return { pos, depth };
+    return { pos, depth, parent };
   }
+
+  // The first stage of an unfold holds one node. Fitting to its bounding box
+  // would slam the camera to maximum zoom, then back out again as the rings
+  // arrive; a floor on the extent keeps the opening shot steady.
+  const MIN_EXTENT = 620;
 
   function easeCameraTo(subset, pad = 70) {
     const target = subset?.length ? subset : nodes;
@@ -294,8 +351,8 @@ function createCanvasRenderer(container, opts) {
     const availW = Math.max(200, w - insets.left - insets.right - pad * 2);
     const availH = Math.max(200, h - insets.top - insets.bottom - pad * 2);
     camera.scale = Math.min(1.9, Math.max(0.12, Math.min(
-      availW / Math.max(1, maxX - minX),
-      availH / Math.max(1, maxY - minY))));
+      availW / Math.max(MIN_EXTENT, maxX - minX),
+      availH / Math.max(MIN_EXTENT, maxY - minY))));
 
     const cx = insets.left + pad + availW / 2;
     const cy = insets.top + pad + availH / 2;
@@ -304,44 +361,101 @@ function createCanvasRenderer(container, opts) {
     camera.active = true;
   }
 
-  function unfold(graph) {
-    mergeGraph(graph);
-    const ids = graph.nodes.map((n) => n.id).filter((id) => byId.has(id));
-    if (!ids.length) return;
-    const seeds = (graph.seeds ?? []).filter((id) => byId.has(id));
-    const { pos, depth } = radialLayout(ids, seeds);
+  /* ---- unfold ---- */
 
-    revealed = new Set(ids);
-    unfoldStart = performance.now();
-
+  /** Start a fresh unfold: ghost the standing graph, ready for the first ring. */
+  function beginUnfold() {
+    revealed = new Set();
+    stageOf = new Map();
+    alpha = 0;                          // the ghosted graph stops drifting
+    for (const e of edges) { e.revealed = false; }
     for (const n of nodes) {
-      if (revealed.has(n.id)) {
-        const p = pos.get(n.id);
-        n.depth = depth.get(n.id) ?? 0;
-        n.isSeed = seeds.includes(n.id);
-        n.fx = n.x; n.fy = n.y;      // where it starts from
-        n.tx = p.x; n.ty = p.y;      // where it unfolds to
-        n.pinned = true;
+      n.pinned = false;
+      n.targetAppear = GHOST_ALPHA;
+      n.tx = n.ty = undefined;
+      n.depth = undefined;
+      n.isSeed = false;
+    }
+  }
+
+  /** Reveal one more ring. Nodes already on screen glide to their new places;
+   *  the new ones grow out of their parent, staggered, and their edges draw
+   *  themselves in behind them. */
+  function addStage({ nodes: incoming = [], relationships = [], stage = 1 } = {}) {
+    if (!revealed) beginUnfold();
+    mergeGraph({ nodes: incoming, relationships });
+    alpha = 0;
+
+    const fresh = new Set();
+    for (const n of incoming) {
+      if (!byId.has(n.id) || revealed.has(n.id)) continue;
+      revealed.add(n.id);
+      stageOf.set(n.id, stage);
+      fresh.add(n.id);
+    }
+    if (!revealed.size) return;
+
+    const ids = [...revealed];
+    const { pos, depth, parent } = flowLayout(ids);
+    const now = performance.now();
+
+    let popped = 0;
+    for (const id of ids) {
+      const n = byId.get(id);
+      const p = pos.get(id);
+      if (!n || !p) continue;
+      if (fresh.has(id)) {
+        // New nodes emerge from wherever their parent currently is, so the ring
+        // visibly grows out of the one inside it rather than fading in on top.
+        const par = parent.get(id) ? byId.get(parent.get(id)) : null;
+        n.x = par ? par.x : p.x;
+        n.y = par ? par.y : p.y;
         n.appear = 0;
+        n.animFrom = 0;
+        n.animStart = now + popped++ * NODE_POP;
       } else {
-        n.pinned = false;
-        n.targetAppear = GHOST_ALPHA;
+        n.animFrom = n.appear ?? 1;
+        n.animStart = now;
+      }
+      n.depth = depth.get(id);
+      n.isSeed = stageOf.get(id) === 1;
+      n.pinned = true;
+      n.fx = n.x; n.fy = n.y;
+      n.tx = p.x; n.ty = p.y;
+    }
+
+    for (const e of edges) {
+      const was = e.revealed;
+      e.revealed = revealed.has(e.from) && revealed.has(e.to);
+      if (e.revealed && !was) {
+        const a = byId.get(e.from), b = byId.get(e.to);
+        e.grow = 0;
+        e.animStart =
+          Math.max(a?.animStart ?? now, b?.animStart ?? now) + NODE_FADE * 0.45;
       }
     }
-    for (const e of edges) {
-      e.revealed = revealed.has(e.from) && revealed.has(e.to);
-      if (e.revealed) e.grow = 0;
-    }
+
     // Fit to where the nodes are going, not where they are now.
-    setTimeout(() => easeCameraTo(nodes.filter((n) => revealed.has(n.id))), 80);
+    setTimeout(() => easeCameraTo(nodes.filter((n) => revealed?.has(n.id))), 60);
   }
 
   function collapse() {
     revealed = null;
+    stageOf = new Map();
+    // Retrieved passages are not part of the standing graph — they belong to one
+    // answer, and go with it.
+    const transient = new Set(
+      nodes.filter((n) => n.label === 'Chunk').map((n) => n.id));
+    if (transient.size) {
+      nodes = nodes.filter((n) => !transient.has(n.id));
+      byId = new Map(nodes.map((n) => [n.id, n]));
+      edges = edges.filter((e) => byId.has(e.from) && byId.has(e.to));
+    }
     for (const n of nodes) {
       n.pinned = false;
       n.targetAppear = 1;
       n.depth = undefined;
+      n.isSeed = false;
       n.tx = n.ty = undefined;
       n.vx = n.vy = 0;
     }
@@ -353,8 +467,8 @@ function createCanvasRenderer(container, opts) {
   /* ---- drawing ---- */
 
   /** Control point for an edge, perpendicular to the chord.
-   *  Straight lines across a ring layout read as a ball of string; a consistent
-   *  bow separates the two directions of a pair and follows the ring's curve. */
+   *  Straight lines across a fan read as a ball of string; a consistent bow
+   *  separates the two directions of a pair and follows the ring's curve. */
   function control(a, b) {
     const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
     const dx = b.x - a.x, dy = b.y - a.y;
@@ -378,8 +492,32 @@ function createCanvasRenderer(container, opts) {
     ctx.stroke();
   }
 
-  const baseRadius = (n) => (n.id === selected ? 17 : n.isSeed && revealed ? 16 : 12);
-  const radius = (n) => baseRadius(n) * (0.35 + 0.65 * Math.max(n.appear ?? 1, 0));
+  /** ctx.roundRect is recent enough that a fallback is cheaper than a probe. */
+  function roundRectPath(x, y, w, h, r) {
+    const rad = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    if (ctx.roundRect) { ctx.roundRect(x, y, w, h, rad); return; }
+    ctx.moveTo(x + rad, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rad);
+    ctx.arcTo(x + w, y + h, x, y + h, rad);
+    ctx.arcTo(x, y + h, x, y, rad);
+    ctx.arcTo(x, y, x + w, y, rad);
+    ctx.closePath();
+  }
+
+  const isChunk = (n) => n.label === 'Chunk';
+
+  const baseRadius = (n) =>
+    n.id === selected ? 17 : isChunk(n) ? 15 : 12;
+  /** Grown by `appear` on the way in, and floored so a wide fan zoomed out to
+   *  fit is still made of visible dots rather than dust. */
+  const radius = (n) => {
+    // The screen-size floor is for the unfold only: applying it to the ghosted
+    // graph turns a faint backdrop into a field of grey dots competing with it.
+    const ghost = revealed && !revealed.has(n.id);
+    const base = ghost ? baseRadius(n) : Math.max(baseRadius(n), MIN_NODE_PX / view.scale);
+    return base * (0.35 + 0.65 * Math.max(n.appear ?? 1, 0));
+  };
 
   function draw() {
     const { w, h } = size();
@@ -396,8 +534,13 @@ function createCanvasRenderer(container, opts) {
       const g = e.grow ?? 1;
       if (g <= 0.01) continue;
       const lit = !revealed || e.revealed;
-      ctx.lineWidth = (lit ? 1.5 : 1) / view.scale;
-      ctx.strokeStyle = lit
+      // An edge out of a passage is the retrieval's own work rather than a fact
+      // the graph already held, so it reads warmer than the rest.
+      const flow = lit && (isChunk(a) || isChunk(b));
+      ctx.lineWidth = (flow ? 1.8 : lit ? 1.5 : 1) / view.scale;
+      ctx.strokeStyle = flow
+        ? `rgba(255,122,184,${0.16 + 0.34 * g})`
+        : lit
         ? `rgba(255,255,255,${0.10 + 0.20 * g})`
         : `rgba(255,255,255,${0.05 * g})`;
       strokeCurve(a, b, g);
@@ -407,7 +550,7 @@ function createCanvasRenderer(container, opts) {
         const ang = Math.atan2(b.y - c.y, b.x - c.x);   // tangent at the end
         const r = radius(b) + 4;
         const tx = b.x - Math.cos(ang) * r, ty = b.y - Math.sin(ang) * r;
-        ctx.fillStyle = 'rgba(255,255,255,0.34)';
+        ctx.fillStyle = flow ? 'rgba(255,77,157,0.5)' : 'rgba(255,255,255,0.34)';
         ctx.beginPath();
         ctx.moveTo(tx, ty);
         ctx.lineTo(tx - Math.cos(ang - 0.4) * 9, ty - Math.sin(ang - 0.4) * 9);
@@ -446,16 +589,35 @@ function createCanvasRenderer(container, opts) {
       }
 
       ctx.globalAlpha = lit ? Math.max(appear, 0.25) : appear;
-      ctx.beginPath();
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      // Passages are squares and entities are circles: the ring a node belongs
+      // to is then readable without following the edges back to the question.
+      if (isChunk(n)) {
+        const s = r * 1.7;
+        roundRectPath(n.x - s / 2, n.y - s / 2, s, s, 5);
+      } else {
+        ctx.beginPath();
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
+      }
       ctx.fillStyle = lit ? base : '#3a2c52';
       ctx.fill();
       ctx.lineWidth = 2.5 / view.scale;
-      ctx.strokeStyle = lit ? (STATUS_RING[n.status] ?? '#888') : 'rgba(255,255,255,0.10)';
+      ctx.strokeStyle = lit
+        ? (isChunk(n) ? CHUNK_RING : STATUS_RING[n.status] ?? '#888')
+        : 'rgba(255,255,255,0.10)';
       ctx.stroke();
       ctx.globalAlpha = 1;
 
-      const showLabel = lit ? appear > 0.5 : view.scale > 1.2;
+      // Ghosted nodes never label themselves during an unfold — the point of
+      // ghosting is to get the rest of the graph out of the way. Inside the
+      // unfold, the outer rings drop their labels once the view is wide enough
+      // that they would only overlap each other.
+      // Each ring out needs more zoom before its labels are worth the clutter:
+      // the passages and their entities carry the answer, the outer ring is
+      // context you go looking for.
+      const needed = revealed ? [0, 0, 0.42, 0.7][Math.min(n.depth ?? 3, 3)] : 0;
+      const showLabel = lit
+        ? appear > 0.5 && view.scale > needed
+        : !revealed && view.scale > 1.2;
       if (showLabel) {
         ctx.globalAlpha = lit ? appear : 0.4;
         ctx.font = '11.5px Inter, "Segoe UI", sans-serif';
@@ -562,7 +724,9 @@ function createCanvasRenderer(container, opts) {
     byId = new Map(nodes.map((n) => [n.id, n]));
     edges = graph.relationships
       .filter((r) => byId.has(r.from) && byId.has(r.to))
-      .map((r) => ({ ...r, grow: 0, revealed: false }));
+      // Defaults first: re-adopting mid-unfold must not reset an edge that has
+      // already drawn itself in.
+      .map((r) => ({ grow: 0, revealed: false, animStart: 0, ...r }));
     alpha = keepPositions ? 0.5 : 1;
   }
 
@@ -583,7 +747,7 @@ function createCanvasRenderer(container, opts) {
   // mid-flight when the viewer returns. Re-fit on the way back in.
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState !== 'visible') return;
-    alpha = Math.max(alpha, 0.1);
+    alpha = Math.max(alpha, revealed ? 0 : 0.1);
     easeCameraTo(revealed ? nodes.filter((n) => revealed.has(n.id)) : nodes);
   });
 
@@ -592,11 +756,17 @@ function createCanvasRenderer(container, opts) {
   return {
     kind: 'canvas',
     setGraph(graph) {
-      revealed = null; selected = null;
+      revealed = null; selected = null; stageOf = new Map();
       adopt(graph, false);
       for (const delay of [500, 1300, 2500]) setTimeout(() => easeCameraTo(nodes), delay);
     },
-    unfold,
+    beginUnfold,
+    addStage,
+    /** One-shot unfold, for views that have no pipeline to follow. */
+    unfold(graph) {
+      beginUnfold();
+      addStage({ nodes: graph.nodes, relationships: graph.relationships ?? [], stage: 1 });
+    },
     collapse,
     setInsets(next) { insets = { left: 0, top: 0, right: 0, bottom: 0, ...next }; },
     debug: () => ({
@@ -620,6 +790,11 @@ function createCanvasRenderer(container, opts) {
       camera.x = w / 2 - n.x * camera.scale;
       camera.y = h / 2 - n.y * camera.scale;
       camera.active = true;
+    },
+    /** Re-fit whatever the unfold is currently showing. Called when a panel
+     *  resizes and changes how much of the stage is actually usable. */
+    refit() {
+      easeCameraTo(revealed ? nodes.filter((n) => revealed.has(n.id)) : nodes);
     },
     fit: () => easeCameraTo(nodes),
   };
@@ -662,6 +837,7 @@ async function createNvlRenderer(container, opts) {
   click.updateCallback('onCanvasClick', () => opts.onBackgroundClick?.());
 
   let current = { nodes: [], relationships: [] };
+  let base = { nodes: [], relationships: [] };
   let highlighted = null;
   let selected = null;
 
@@ -695,28 +871,39 @@ async function createNvlRenderer(container, opts) {
     if (ids.length) nvl.fit(ids);
   };
 
+  /** NVL runs its own layout, so a stage is just "add these and highlight the
+   *  running total" — the rings arrive in order, without the radial fan. */
+  function addStage({ nodes: incoming = [], relationships = [] } = {}) {
+    const known = new Set(current.nodes.map((n) => n.id));
+    const relIds = new Set(current.relationships.map((r) => r.id));
+    current = {
+      nodes: current.nodes.concat(incoming.filter((n) => !known.has(n.id))),
+      relationships: current.relationships.concat(
+        relationships.filter((r) => !relIds.has(r.id))),
+    };
+    highlighted = new Set([...(highlighted ?? []), ...incoming.map((n) => n.id)]);
+    paint();
+    setTimeout(() => nvl.fit([...highlighted]), 200);
+  }
+
   return {
     kind: 'nvl',
     setGraph(graph) {
-      current = graph; highlighted = null; selected = null;
+      current = graph; base = graph; highlighted = null; selected = null;
       clear(); paint();
       setTimeout(fitAll, 400);
     },
+    beginUnfold() { highlighted = new Set(); },
+    addStage,
     unfold(graph) {
-      const ids = new Set(graph.nodes.map((n) => n.id));
-      const relIds = new Set(current.relationships.map((r) => r.id));
-      current = {
-        nodes: current.nodes.concat(graph.nodes.filter((n) => !current.nodes.some((c) => c.id === n.id))),
-        relationships: current.relationships.concat(graph.relationships.filter((r) => !relIds.has(r.id))),
-      };
-      highlighted = ids;
-      paint();
-      setTimeout(() => nvl.fit([...ids]), 200);
+      highlighted = new Set();
+      addStage({ nodes: graph.nodes, relationships: graph.relationships ?? [] });
     },
-    collapse() { highlighted = null; paint(); fitAll(); },
+    collapse() { current = base; highlighted = null; clear(); paint(); fitAll(); },
     setInsets() { /* NVL owns its own viewport */ },
     select(id) { selected = id; paint(); },
     focus(id) { nvl.fit([id]); },
+    refit: fitAll,
     fit: fitAll,
   };
 }
