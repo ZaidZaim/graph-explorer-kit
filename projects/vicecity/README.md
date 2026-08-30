@@ -31,8 +31,11 @@ entities both appear.
 | **Event** | trailer premieres, two delay announcements, the 2022 breach, sentencing |
 | **Organization** | Rockstar Games, Take-Two, Netflix, Lapsus$, Only Raw Records |
 
-In-game and real-world entities share the same labels and are separated by a
-`fictional` flag, so you can ask about the fiction and the business in one query.
+In-game and real-world **people, places and organizations** share the same labels
+and are separated by a `fictional` flag, so you can ask about the fiction and the
+business in one query. `Object` and `Event` carry no such flag — the '95 Grotti
+Cheetah and a real PS5 are both just `Object` — so a blanket
+`WHERE n.fictional = true` silently drops every in-game vehicle and edition.
 
 ## Evidence levels are the point
 
@@ -93,6 +96,17 @@ uv run graphrag-ask --retriever text2cypher "How many entities are only rumored?
 
 The last one is the case for having a graph at all: counting and aggregation are
 things vector search cannot do, and `text2cypher` answers it by writing Cypher.
+
+Ask for both halves at once and no single retriever will do:
+
+```bash
+uv run graphrag-agent --show-tools "How many entities are only rumored, and which of them touch the 2022 breach?"
+```
+
+That is a count and a lookup in one sentence. `text2cypher` can count and never
+reads the prose; the hybrid retrievers read the prose and quietly undercount. The
+agent runs both tools and says so — `--show-tools` prints which it reached for, and
+the explorer lights up what they actually read.
 
 ## How this graph was built
 

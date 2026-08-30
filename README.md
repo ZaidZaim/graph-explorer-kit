@@ -29,7 +29,7 @@ Everything in `src/graphrag_kit/` is domain-agnostic. Everything that makes a de
 environment variable:
 
 ```bash
-GRAPHRAG_PROJECT=projects.example
+GRAPHRAG_PROJECT=projects.vicecity
 ```
 
 A project is a single `ProjectSpec`: a schema, a data directory, extraction rules,
