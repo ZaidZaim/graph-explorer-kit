@@ -58,6 +58,11 @@ or point `.env` at Aura. APOC is required — the entity resolver calls
 `apoc.refactor.mergeNodes`. It is bundled in the compose file and present on all
 Aura tiers.
 
+Neo4j 5.23 or newer. Vector indexes need 5.11+, and `graphrag-reset` uses the
+variable-scope `CALL (n) { ... } IN TRANSACTIONS` form that arrived in 5.23 — on an
+older 5.x it fails with a syntax error that says nothing about versions. The compose
+file pins `neo4j:2025.10-community`.
+
 **2. Models.** Two providers, selected with `LLM_PROVIDER`:
 
 | | |
@@ -116,7 +121,11 @@ uv run graphrag-ingest
 
 Chunks every document in the project's data directory, embeds each chunk, extracts
 entities and relationships under the project's schema, rolls up evidence levels,
-then merges duplicate entities.
+then merges duplicate entities. `.md`, `.txt` and `.pdf` are picked up, recursively.
+
+Name files explicitly to ingest only those — `uv run graphrag-ingest data/one-new-note.md`
+— and pass `--no-resolve` to skip the duplicate-entity merge, which is what you want
+while you are still iterating on `extraction_rules`.
 
 ```bash
 uv run graphrag-serve
@@ -158,13 +167,19 @@ reading the first result. Retrieval is unchanged: same indexes, same
 | `look_up_entity` | entity fulltext index | A name you already have, and its connections both ways. |
 | `graph_overview` | label/type counts | What kinds of things exist at all. |
 
-Every tool that touches entities records their element IDs on an `EvidenceTrail`, so
-the explorer still lights up the evidence — here the subgraph the agent *actually
-read*, including entities reached by a name lookup that no chunk search returned.
-`--show-tools` prints the same trail in the terminal.
+`search_documents` and `look_up_entity` record the element IDs of what they read on
+an `EvidenceTrail`, so the explorer still lights up the evidence — the entities the
+agent *actually read* plus one hop out from them, including entities reached by a
+name lookup that no chunk search returned. The other two record only the call: an
+answer drawn from `query_graph_with_cypher` or `graph_overview` alone leaves no IDs
+behind, and the highlight falls back to the ordinary hybrid lookup. `--show-tools`
+prints the same trail in the terminal.
 
-The agent is also the last entry in the explorer's retriever dropdown. It is the
-same `POST /api/ask` endpoint; the tool calls come back in the context panel.
+The agent is also the last entry in the explorer's retriever dropdown, served there
+by `agent_stages()` on `POST /api/ask/stream` — the same endpoint every other mode
+uses. The tool calls come back in the context panel. `POST /api/ask` answers agent
+questions too, as plain JSON for scripted callers; the browser simply never calls
+it.
 
 Model configuration is shared with everything else — same deployment, same Entra
 or key auth — except for the API version, which it sets itself. See
@@ -175,18 +190,63 @@ or key auth — except for the API version, which it sets itself. See
 - **Ask a question** — the graph unfolds in step with the pipeline rather than
   redrawing once at the end: the matched passages first, then the entities
   extracted from them, then one hop of neighbours, while the model is still
-  writing. A stage line names what is running. The answer then dims the graph to
-  just the entities behind it and zooms to them; evidence levels in the answer
-  are colour-coded. `agent` mode has no rings to stream — it decides what to read
-  as it goes — so it lights up exactly what its tools touched, once, at the end.
+  writing. The standing graph is ghosted the moment you ask, a stage line names
+  what is running, and the camera re-fits to each ring as it lands — so by the
+  time the prose arrives the view is already framed on the evidence. Evidence
+  levels in the answer are colour-coded. `agent` mode has no rings to stream — it
+  decides what to read as it goes — so it lights up what its tools touched, plus
+  one hop out, once, at the end.
 - **Filter** by entity type or evidence level; counts come from the live graph.
 - **Click a node** for its properties and every connection, each one clickable.
 - **Search** runs against a fulltext index over entity names and descriptions.
+- **Timeline** lists dated `:Event` nodes in order. It has something to show only
+  when the project's schema declares an `Event` type carrying a `date` —
+  `projects.example` declares neither, so against the template's own corpus the
+  button comes back empty.
+
+**The highlight is not the retriever's own result.** Whatever retriever answered,
+the rings come from a separate vector + fulltext lookup for the question
+(`retrieved_chunks` on the streaming path, `evidence_subgraph` on `/api/ask`),
+because retrievers hand back rendered text and the front-end needs element IDs.
+For `hybrid` and `hybrid-cypher` that hits the same two indexes that answered, so
+the rings match what was read. For `vector`, `vector-cypher` and especially
+`text2cypher` — which touches neither index — it is an independent lookup, so read
+the rings as *what this question matches in the corpus*, not *what this retriever
+read*. `agent` mode is the exception: its ring is the trail its tools actually left.
 
 The renderer is a dependency-free canvas force layout. NVL is wired up too and
 available at `?renderer=nvl`, but it is not the default: it ships ESM-only, so it
 has to come from a CDN at runtime, which costs a ~10s cold load and puts a live
 demo at the mercy of someone else's uptime.
+
+### The API behind it
+
+The explorer is just a client. Everything it does is available over HTTP, which is
+also the shortest path to putting your own front-end on the graph:
+
+| Route | Returns |
+|---|---|
+| `GET /api/meta` | Project title, labels, evidence levels, palette, live counts. |
+| `GET /api/graph?labels=&status=` | The whole graph, comma-separated filters. Both default to everything the project declares. |
+| `GET /api/expand?id=` | One node plus its direct neighbours and the edges among them. |
+| `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. |
+| `GET /api/timeline` | Dated `:Event` nodes in date order. |
+| `POST /api/ask` | Answer, retrieved context, and evidence subgraph, as one JSON body. |
+| `POST /api/ask/stream` | The same work as Server-Sent Events, one event per stage. |
+
+Both ask routes take the same body — `retriever` and `top_k` are optional, and
+`top_k` is capped at 25:
+
+```json
+{ "question": "...", "retriever": "hybrid-cypher", "top_k": 5 }
+```
+
+The stream emits five event types. `stage` announces what is running; `unfold`
+carries one ring of nodes and relationships (`evidence`, `entities`, then
+`neighbourhood`); `answer` carries the prose and the retrieved context; `warning`
+means a ring failed but the answer is still coming; `error` ends the stream. A
+failed ring is deliberately non-fatal — losing the picture should not cost you the
+answer.
 
 ## Retrievers
 
@@ -214,9 +274,9 @@ re-declared: `node` (the matched `:Chunk`) and `score`. `score` must appear in t
 ## Evidence levels
 
 Every entity carries a `status`. The engine treats these as ordered,
-strongest-first, and the project names them (default: `confirmed`, `reported`,
-`rumored`). This lets the graph answer "what do we actually know?" as distinct
-from "what is being said?"
+strongest-first, and the project names them in its `evidence_levels` (default:
+`confirmed`, `reported`, `rumored`). This lets the graph answer "what do we actually
+know?" as distinct from "what is being said?"
 
 Because an entity can be asserted at different levels in different documents, a
 rollup pass runs **before** entity resolution and writes the strongest observed
@@ -224,6 +284,15 @@ level onto every duplicate, keeping the full observed set in `evidence_levels`.
 Without it, `apoc.refactor.mergeNodes` — which is called with
 `properties: 'discard'` — keeps whichever value it happens to hit first, and a
 court-documented fact can come out the far side marked as a rumour.
+
+An entity the extractor left unrated is not dropped, but it is not neutral either.
+Retrieval context tags it `[unrated]`, while the explorer's projection, filters and
+counts all read `coalesce(n.status, 'reported')` — so on screen it *becomes*
+`reported`. That is a trap if you rename the levels: a project whose
+`evidence_levels` are `("high", "low")` has no bucket called `reported`, so every
+ungraded entity falls outside every filter and disappears from the explorer, with no
+error and a count of zero. Either keep `reported` in the tuple, or write extraction
+rules that grade everything.
 
 ## Starting over
 
@@ -233,13 +302,30 @@ uv run graphrag-reset --yes
 
 Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
 `__KGBuilder__`) and drops its indexes. Safe against a database holding other data.
+Because the indexes go with it, the loop back to a working graph is
+`graphrag-reset` → `graphrag-setup` → `graphrag-ingest`.
+
+Add `--keep-indexes` to clear the data and leave the indexes standing, which skips
+the `graphrag-setup` rebuild and its ONLINE poll. That is the right choice when you
+are re-ingesting the same corpus, and the wrong one if `EMBEDDING_DIMENSIONS` has
+changed — the vector index is fixed-width and has to be recreated.
+
+**One project per database.** The `project` key stamped onto each `Document` is
+metadata; nothing queries it. Point `GRAPHRAG_PROJECT` at a second corpus without
+resetting and both land in one graph, where the counts, the filters and every
+retriever span the lot. Reset between projects, or give each its own
+`NEO4J_DATABASE` — which needs Aura or Enterprise, since Community serves only
+`neo4j`.
 
 ## Notes and gotchas
 
 - **Embedding dimensions must match the deployment.** `text-embedding-3-small` is
   1536, `-3-large` is 3072. `EMBEDDING_DIMENSIONS` has to agree with whatever is
-  actually deployed; changing it after ingesting needs a `graphrag-reset --yes`
-  and a re-ingest, because the vector index is created at a fixed width.
+  actually deployed; changing it after ingesting needs a `graphrag-reset --yes`,
+  then `graphrag-setup` again, then a re-ingest — the vector index is created at a
+  fixed width, and `graphrag-setup` is the only thing that creates it. Re-ingesting
+  straight after a reset writes embeddings into a database with no vector index,
+  which fails silently: retrieval just returns nothing.
 - **Temperature is opt-in.** Newer reasoning models (`gpt-5-mini` and friends)
   reject any temperature other than their default and return HTTP 400, so nothing
   is sent unless you set `LLM_TEMPERATURE`.
@@ -267,8 +353,10 @@ Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
   with "Phase 2". Consistent naming is enforced in the extraction prompt instead.
 - **`Text2CypherRetriever` will not execute writes.** Generated Cypher is run
   through `EXPLAIN` first and rejected if it writes, so a prompt-injected `DELETE`
-  never reaches the graph. The agent reaches Cypher only through this retriever,
-  so the same guarantee covers it.
+  never reaches the graph. The only *model-written* Cypher the agent can run goes
+  through this retriever, so the same guarantee covers it — `look_up_entity` and
+  `graph_overview` run fixed, read-only statements in which the model supplies
+  parameters and never Cypher.
 - **neo4j-graphrag's extras are unbundled, on purpose.** `[openai]` pins
   `openai<2` and `[experimental]` does the same transitively through llama-index;
   `agent-framework-openai` needs `openai>=2.25`. `pyproject.toml` therefore depends
@@ -280,9 +368,11 @@ Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
   the neo4j-graphrag clients, which speak Chat Completions and are usually pinned
   to a GA version like `2024-10-21` — a version with no `/responses` route at all.
   Passing it to the agent's client turns a working deployment into an opaque 404,
-  so the agent keeps its own default (`preview`) and its own override,
-  `AGENT_AZURE_API_VERSION`. Set `AGENT_CHAT_API=chat-completions` where
-  `/responses` is not served.
+  so the agent keeps its own default per API — `preview` for `AGENT_CHAT_API=responses`
+  (the default) and `2024-12-01-preview` for `chat-completions` — and its own
+  override, `AGENT_AZURE_API_VERSION`. Set `AGENT_CHAT_API=chat-completions` where
+  `/responses` is not served, and note that pinning the override then pins it for
+  whichever API you are on.
 - **Agent Framework renamed most of its Python surface in 2026.** `ChatAgent` is
   `Agent`, `chat_client=` is `client=`, `@ai_function` is `@tool`, `AgentThread` is
   `AgentSession`, and `run_stream()` is `run(..., stream=True)`. The
