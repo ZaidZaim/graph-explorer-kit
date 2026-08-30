@@ -248,3 +248,82 @@ def describe_models() -> str:
         f"embed={os.getenv('EMBEDDING_MODEL', 'text-embedding-3-small')} "
         f"({EMBEDDING_DIMENSIONS}d)"
     )
+
+
+# --- Agent Framework chat client --------------------------------------------
+
+# The Agent Framework talks to Azure through the same `agent_framework.openai`
+# clients as direct OpenAI — the AzureOpenAI* compatibility classes were removed
+# from `agent_framework.azure` in the 2026 release. Azure routing is selected by
+# passing `azure_endpoint`/`credential` explicitly, which also stops an ambient
+# OPENAI_API_KEY from silently pulling the client back to api.openai.com.
+#
+# Two API surfaces are available. Responses is the framework's recommended
+# client and the only one with hosted tools; Chat Completions is the fallback
+# for deployments or regions where /responses is not available.
+AGENT_CHAT_APIS = ("responses", "chat-completions")
+
+# Deliberately NOT AZURE_OPENAI_API_VERSION. That variable is set for the
+# neo4j-graphrag clients, which speak Chat Completions and Embeddings and are
+# routinely pinned to a GA version like 2024-10-21 — a version with no
+# /responses route at all. Sending it here turns a working deployment into an
+# opaque 404, so the agent client keeps its own default and its own override.
+AGENT_DEFAULT_API_VERSIONS = {
+    "responses": "preview",
+    "chat-completions": "2024-12-01-preview",
+}
+
+
+def agent_chat_api() -> str:
+    value = os.getenv("AGENT_CHAT_API", "responses").strip().lower()
+    if value not in AGENT_CHAT_APIS:
+        raise ConfigError(
+            f"AGENT_CHAT_API must be one of {', '.join(AGENT_CHAT_APIS)}, got {value!r}"
+        )
+    return value
+
+
+def get_chat_client():
+    """Agent Framework chat client for the active provider.
+
+    Returns an ``OpenAIChatClient`` (Responses API) or ``OpenAIChatCompletionClient``,
+    pointed at Foundry / Azure OpenAI or at api.openai.com to match LLM_PROVIDER.
+    This is the agent's model; ``get_llm()`` remains the neo4j-graphrag one used by
+    extraction, text2cypher and the single-shot RAG pipeline.
+    """
+    from agent_framework.openai import OpenAIChatClient, OpenAIChatCompletionClient
+
+    api = agent_chat_api()
+    client_cls = OpenAIChatClient if api == "responses" else OpenAIChatCompletionClient
+
+    if provider() == "openai":
+        _require("OPENAI_API_KEY")
+        return client_cls(model=os.getenv("LLM_MODEL", "gpt-4.1-mini"))
+
+    kwargs = {
+        # On Azure this is the deployment name, not the model name.
+        "model": _require("AZURE_OPENAI_CHAT_DEPLOYMENT"),
+        "azure_endpoint": _require("AZURE_OPENAI_ENDPOINT"),
+        "api_version": os.getenv("AGENT_AZURE_API_VERSION") or AGENT_DEFAULT_API_VERSIONS[api],
+    }
+    if azure_auth_mode() == "key":
+        kwargs["api_key"] = _require("AZURE_OPENAI_API_KEY")
+    else:
+        # A plain callable returning a bearer token is one of the accepted
+        # credential types, so the cached provider from get_llm() is reused
+        # rather than probing DefaultAzureCredential's sources a second time.
+        kwargs["credential"] = _azure_token_provider()
+    return client_cls(**kwargs)
+
+
+def describe_agent_model() -> str:
+    """One-line summary of the agent's model, for startup logging."""
+    api = agent_chat_api()
+    if provider() == "azure":
+        auth = "api-key" if azure_auth_mode() == "key" else "Entra ID (az login)"
+        version = os.getenv("AGENT_AZURE_API_VERSION") or AGENT_DEFAULT_API_VERSIONS[api]
+        return (
+            f"azure {api} model={os.getenv('AZURE_OPENAI_CHAT_DEPLOYMENT', '?')} "
+            f"api-version={version} (auth={auth})"
+        )
+    return f"openai {api} model={os.getenv('LLM_MODEL', 'gpt-4.1-mini')}"
