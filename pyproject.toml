@@ -10,7 +10,16 @@ dependencies = [
     "python-dotenv>=1.0.1",
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.32.0",
-    "neo4j-graphrag[experimental,openai]>=1.19.0",
+    # neo4j-graphrag's [openai] and [experimental] extras both pin openai<2 (the
+    # latter transitively, through llama-index), and agent-framework-openai needs
+    # openai>=2.25. The extras are therefore unbundled: openai is pinned directly
+    # at 2.x, and langchain-text-splitters — the only part of [experimental] this
+    # scaffold uses — is declared on its own. That drops llama-index and neo4j-viz,
+    # neither of which is imported anywhere here.
+    "neo4j-graphrag>=1.19.0",
+    "langchain-text-splitters>=0.3.0",
+    "openai>=2.25.0",
+    "agent-framework-openai>=1.14.1",
     "azure-identity>=1.25.3",
 ]
 
@@ -21,6 +30,7 @@ dev = ["ruff>=0.9.0"]
 graphrag-setup = "graphrag_kit.setup_indexes:main"
 graphrag-ingest = "graphrag_kit.ingest:main"
 graphrag-ask = "graphrag_kit.ask:main"
+graphrag-agent = "graphrag_kit.agent:main"
 graphrag-serve = "graphrag_kit.server:main"
 graphrag-reset = "graphrag_kit.reset:main"
 

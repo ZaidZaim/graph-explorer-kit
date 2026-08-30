@@ -4,8 +4,9 @@
     {
       "name": "graphrag-explorer",
       "runtimeExecutable": ".venv/Scripts/python.exe",
-      "runtimeArgs": ["-m", "graphrag_kit.server", "--port", "8000"],
-      "port": 8000
+      "runtimeArgs": ["-m", "graphrag_kit.server"],
+      "port": 8000,
+      "autoPort": true
     }
   ]
 }

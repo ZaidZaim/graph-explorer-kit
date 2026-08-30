@@ -164,3 +164,41 @@ RETRIEVERS = {
     "hybrid-cypher": hybrid_cypher_retriever,
     "text2cypher": text2cypher_retriever,
 }
+
+
+# Vector and fulltext hits are unioned rather than intersected: each recovers
+# chunks the other misses, and `max(score)` keeps whichever lookup was more
+# confident about a chunk both of them found.
+EVIDENCE_SEED_QUERY = """
+CALL () {
+    CALL db.index.vector.queryNodes($vector_index, $top_k, $vector)
+    YIELD node, score RETURN node, score
+    UNION
+    CALL db.index.fulltext.queryNodes($fulltext_index, $question, {limit: $top_k})
+    YIELD node, score RETURN node, score
+}
+WITH node, max(score) AS score ORDER BY score DESC LIMIT $top_k
+MATCH (e:__Entity__)-[:FROM_CHUNK]->(node)
+RETURN DISTINCT elementId(e) AS id
+"""
+
+
+def evidence_entity_ids(
+    driver: neo4j.Driver, embedder, question: str, top_k: int = 5
+) -> list[str]:
+    """Element IDs of the entities extracted from the chunks `question` retrieves.
+
+    A second lookup rather than a parse of the retriever's output, deliberately:
+    retrievers hand back rendered text, and every caller here — the explorer's
+    graph highlight, the agent's evidence trail — needs element IDs.
+    """
+    records, _, _ = driver.execute_query(
+        EVIDENCE_SEED_QUERY,
+        database_=get_database(),
+        vector_index=VECTOR_INDEX_NAME,
+        fulltext_index=FULLTEXT_INDEX_NAME,
+        question=question,
+        vector=embedder.embed_query(question),
+        top_k=top_k,
+    )
+    return [r["id"] for r in records]

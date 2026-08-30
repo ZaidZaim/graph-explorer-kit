@@ -193,6 +193,25 @@ button.small { padding: 4px 9px; font-size: 11px; flex: 0 0 auto; }
   margin: 0; font-size: 11px; letter-spacing: 1.6px;
   text-transform: uppercase; color: var(--pink);
 }
+/* Narrates the pipeline stage the graph is currently drawing, so the wait for
+   the model reads as progress rather than a stall. */
+.stage-line {
+  margin: 0 0 10px; font-family: var(--mono); font-size: 11px;
+  letter-spacing: .3px; color: var(--pink);
+  display: flex; align-items: center; gap: 8px;
+}
+.stage-line::before {
+  content: ''; flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--pink); animation: stage-pulse 1.15s ease-in-out infinite;
+}
+@keyframes stage-pulse {
+  0%, 100% { opacity: .25; transform: scale(.7); }
+  50%      { opacity: 1;   transform: scale(1.15); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .stage-line::before { animation: none; opacity: .8; }
+}
+
 #answer-body { font-size: 13.5px; line-height: 1.62; white-space: pre-wrap; }
 #answer-body .ev { font-weight: 650; }
 #answer-body .ev-confirmed { color: var(--confirmed); }
