@@ -5,7 +5,7 @@
  * back to a built-in canvas renderer so the demo still works.
  */
 
-import { createRenderer } from '/static/renderer.js?v=2';
+import { createRenderer } from '/static/renderer.js?v=3';
 
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
@@ -14,6 +14,14 @@ const api = async (path, opts) => {
   return res.json();
 };
 
+const CHUNK_COLOR = '#7d6ea8';
+
+/** Which ring each backend stage lands on. The order is the pipeline's own: the
+ *  passages the question matched, the entities in them, and the neighbourhood
+ *  the graph contributes on top. The question itself stays in the ask bar and on
+ *  the answer card — it is not a thing in the graph. */
+const STAGE_RING = { evidence: 1, entities: 2, neighbourhood: 3 };
+
 const state = {
   meta: null,
   graph: { nodes: [], relationships: [] },
@@ -21,6 +29,9 @@ const state = {
   activeStatuses: new Set(),
   renderer: null,
   selected: null,
+  // Nodes that exist only inside the current unfold (passages, mostly), so the
+  // details panel can describe them without a round trip.
+  unfoldNodes: new Map(),
 };
 
 /* ---------------- boot ---------------- */
@@ -43,11 +54,14 @@ async function boot() {
     state.renderer = await createRenderer($('graph'), {
       onNodeClick: showDetails,
       onBackgroundClick: hideDetails,
-      colors: state.meta.colors,
+      // Chunk is not a schema label, so the project palette has no colour for
+      // it — but it is a ring in every unfold.
+      colors: { ...state.meta.colors, Chunk: CHUNK_COLOR },
     });
 
     syncInsets();
     window.addEventListener('resize', syncInsets);
+    new ResizeObserver(syncInsets).observe($('answer'));
     // Dev affordance: inspect layout state from the console.
     window.__graphrag = { state, renderer: state.renderer };
     await refreshGraph();
@@ -75,13 +89,26 @@ function syncInsets() {
   const stage = $('stage').getBoundingClientRect();
   const answer = $('answer');
   const askBar = $('ask-bar');
-  let left = 0;
+  let left = 0, top = 0;
   if (!answer.hidden) {
     const r = answer.getBoundingClientRect();
-    left = Math.max(0, r.right - stage.left + 16);
+    // Below the narrow breakpoint the card spans the whole stage. Reserving its
+    // width there leaves a sliver and shoves the graph off the right edge, so
+    // reserve its height instead.
+    if (r.width > stage.width * 0.6) top = Math.max(0, r.bottom - stage.top + 16);
+    else left = Math.max(0, r.right - stage.left + 16);
   }
   const bottom = askBar ? stage.bottom - askBar.getBoundingClientRect().top + 16 : 0;
-  state.renderer?.setInsets({ left, bottom: Math.max(0, bottom) });
+  state.renderer?.setInsets({ left, top, bottom: Math.max(0, bottom) });
+  refitSoon();
+}
+
+// The answer card grows as stages and then prose arrive, which moves the insets
+// under the graph. Re-fit once the churn settles rather than on every pixel.
+let refitTimer = null;
+function refitSoon() {
+  clearTimeout(refitTimer);
+  refitTimer = setTimeout(() => state.renderer?.refit(), 160);
 }
 
 function setLoading(text) {
@@ -191,8 +218,11 @@ async function refreshGraph() {
 
 async function showDetails(nodeId) {
   const node = state.graph.nodes.find((n) => n.id === nodeId)
+    ?? state.unfoldNodes.get(nodeId)
     ?? (await api(`/api/expand?id=${encodeURIComponent(nodeId)}`)).nodes.find((n) => n.id === nodeId);
   if (!node) return;
+
+  if (node.label === 'Chunk') { showChunkDetails(node); return; }
 
   state.selected = nodeId;
   const color = state.meta.colors[node.label] ?? '#888';
@@ -237,6 +267,26 @@ async function showDetails(nodeId) {
   state.renderer.select(nodeId);
 }
 
+/** A retrieved passage is raw source text, not a graph record — it has no
+ *  evidence level and no relationships of its own worth listing. */
+function showChunkDetails(node) {
+  state.selected = node.id;
+  $('detail-label').textContent = 'Passage';
+  $('detail-label').style.background = CHUNK_COLOR;
+  $('detail-name').textContent = node.source ?? 'Retrieved passage';
+  $('detail-status').textContent = 'retrieved for this question';
+  $('detail-status').className = 'evidence';
+  $('detail-description').textContent = node.text ?? node.description ?? '';
+  $('detail-props').innerHTML = node.score
+    ? `<dt>Score</dt><dd>${node.score.toFixed(3)}</dd>`
+    : '';
+  $('detail-rels').innerHTML =
+    '<li style="cursor:default">The entities extracted from this passage are the next ring out.</li>';
+  $('details').hidden = false;
+  $('app').classList.add('with-details');
+  state.renderer.select(node.id);
+}
+
 function hideDetails() {
   state.selected = null;
   $('details').hidden = true;
@@ -246,6 +296,60 @@ function hideDetails() {
 
 /* ---------------- ask ---------------- */
 
+/** Read a text/event-stream response, calling back once per complete event.
+ *  EventSource cannot POST, so the stream is read off fetch by hand. */
+async function streamEvents(path, body, onEvent) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`${path} -> ${res.status} ${await res.text()}`);
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    let split;
+    while ((split = buffer.indexOf('\n\n')) >= 0) {
+      const raw = buffer.slice(0, split);
+      buffer = buffer.slice(split + 2);
+      let name = 'message', data = '';
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event:')) name = line.slice(6).trim();
+        else if (line.startsWith('data:')) data += line.slice(5).trim();
+      }
+      if (data) onEvent(name, JSON.parse(data));
+    }
+  }
+}
+
+/** Stages arrive as fast as the database answers, which is faster than the eye
+ *  can follow. This holds each one on screen long enough to be read. */
+function beatQueue(gap) {
+  const pending = [];
+  let running = false;
+  const pump = async () => {
+    if (running) return;
+    running = true;
+    while (pending.length) {
+      pending.shift()();
+      await new Promise((r) => setTimeout(r, gap));
+    }
+    running = false;
+  };
+  return { push(fn) { pending.push(fn); pump(); } };
+}
+
+function setStage(text) {
+  const el = $('answer-stage');
+  el.textContent = text ?? '';
+  el.hidden = !text;
+}
+
 async function askQuestion() {
   const question = $('question').value.trim();
   if (!question) return;
@@ -254,36 +358,66 @@ async function askQuestion() {
   btn.disabled = true;
   btn.textContent = 'Thinking…';
   $('answer').hidden = false;
-    syncInsets();
-  $('answer-body').textContent = 'Retrieving from the graph…';
+  syncInsets();
+  $('answer-body').innerHTML = '';
   $('answer-context').innerHTML = '';
+  setStage('Sending the question…');
+
+  // Ghost the standing graph and wait for stage one. Each stage adds a ring, so
+  // the picture grows in the order the answer was reasoned out instead of
+  // arriving all at once at the end.
+  state.unfoldNodes = new Map();
+  state.renderer.beginUnfold();
+
+  const beat = beatQueue(640);
+  let answered = false;
+  let gotRings = false;
 
   try {
-    const res = await api('/api/ask', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        question,
-        retriever: $('retriever').value,
-        top_k: 5,
-      }),
-    });
-
-    $('answer-body').innerHTML = markEvidence(renderMarkdown(res.answer));
-    $('answer-context').innerHTML = res.context.length
-      ? res.context.map((c) => `<pre>${escapeHtml(c)}</pre>`).join('')
-      : '<pre>(no context returned)</pre>';
-
-    // Unfold the evidence: the graph re-lays itself as a radial tree with the
-    // chunks that answered the question at the centre, opening ring by ring.
-    if (res.subgraph.nodes.length) {
-      state.renderer.unfold(res.subgraph);
-    } else {
-      state.renderer.collapse();
-    }
+    await streamEvents('/api/ask/stream',
+      { question, retriever: $('retriever').value, top_k: 5 },
+      (name, data) => {
+        if (name === 'stage') {
+          beat.push(() => setStage(data.label));
+        } else if (name === 'unfold') {
+          gotRings = true;
+          beat.push(() => {
+            setStage(data.label);
+            for (const n of data.nodes) state.unfoldNodes.set(n.id, n);
+            state.renderer.addStage({
+              nodes: data.nodes,
+              relationships: data.relationships ?? [],
+              stage: STAGE_RING[data.stage] ?? 1,
+            });
+          });
+        } else if (name === 'answer') {
+          answered = true;
+          setStage(null);
+          $('answer-body').innerHTML = markEvidence(renderMarkdown(data.answer));
+          $('answer-context').innerHTML = data.context.length
+            ? data.context.map((c) => `<pre>${escapeHtml(c)}</pre>`).join('')
+            : '<pre>(no context returned)</pre>';
+        } else if (name === 'warning') {
+          console.warn(data.message);
+        } else if (name === 'error') {
+          throw new Error(data.message);
+        }
+      });
+    if (!answered) throw new Error('the stream ended before the answer arrived');
   } catch (err) {
     console.error(err);
-    $('answer-body').textContent = `Request failed: ${err.message}`;
+    setStage(null);
+    // A request that produced no rings at all leaves the graph ghosted with
+    // nothing to look at. Put it back rather than stranding the viewer.
+    if (!gotRings) {
+      state.unfoldNodes = new Map();
+      state.renderer.collapse();
+    }
+    // fetch rejects with a TypeError when it cannot reach the host at all,
+    // which as "Failed to fetch" reads like a bug in the page.
+    $('answer-body').textContent = err.name === 'TypeError'
+      ? 'Could not reach the server — is it still running?'
+      : `Request failed: ${err.message}`;
   } finally {
     btn.disabled = false;
     btn.textContent = 'Ask';
@@ -367,10 +501,10 @@ function escapeHtml(value) {
 
 async function showTimeline() {
   const res = await api('/api/timeline');
-  const ids = res.nodes.map((n) => n.id);
-  state.renderer.unfold({ nodes: res.nodes, relationships: [], seeds: ids });
+  state.renderer.unfold({ nodes: res.nodes, relationships: [] });
   $('answer').hidden = false;
-    syncInsets();
+  syncInsets();
+  setStage(null);
   $('answer-body').innerHTML = res.nodes
     .map((n) => `<strong>${escapeHtml(n.date)}</strong>  ${escapeHtml(n.name)}`)
     .join('\n');
@@ -384,11 +518,15 @@ function wireEvents() {
   $('close-answer').addEventListener('click', () => {
     $('answer').hidden = true;
     syncInsets();
+    setStage(null);
+    state.unfoldNodes = new Map();
     state.renderer?.collapse();
   });
   $('reset-view').addEventListener('click', async () => {
     $('answer').hidden = true;
     syncInsets();
+    setStage(null);
+    state.unfoldNodes = new Map();
     await refreshGraph();
   });
   $('show-timeline').addEventListener('click', showTimeline);

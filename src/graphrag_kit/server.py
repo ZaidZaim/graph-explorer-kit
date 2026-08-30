@@ -9,17 +9,26 @@ so the front-end can light up the evidence instead of asking you to trust a
 paragraph of prose. Step 2 re-runs the vector/fulltext lookup itself rather than
 parsing GraphRAG's context string, because the retriever hands back formatted text
 and the front-end needs element IDs.
+
+POST /api/ask/stream does the same work as Server-Sent Events, one event per
+stage of the pipeline, so the graph can unfold in step with the reasoning rather
+than appearing all at once when the model finally finishes. The LLM call is
+handed to a worker thread first, so the retrieval rings reach the browser while
+the model is still writing.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from neo4j_graphrag.generation import GraphRAG
 from neo4j_graphrag.generation.prompts import RagTemplate
@@ -339,6 +348,251 @@ def evidence_subgraph(question: str, top_k: int) -> dict:
         top_k=top_k,
     )
     return subgraph_for_ids([r["id"] for r in records], include_neighbours=True)
+
+
+# --- staged retrieval, for the streaming unfold ------------------------------
+
+CHUNK_EXCERPT = 180
+
+
+def retrieved_chunks(question: str, top_k: int) -> list[dict]:
+    """The chunks the hybrid lookup actually returns, as graph nodes.
+
+    These are the first thing the answer stands on, so they are the first ring
+    the browser draws — before the model has written a word.
+    """
+    vector = state["embedder"].embed_query(question)
+    records = run(
+        """
+        CALL () {
+            CALL db.index.vector.queryNodes($vector_index, $top_k, $vector)
+            YIELD node, score RETURN node, score
+            UNION
+            CALL db.index.fulltext.queryNodes($fulltext_index, $question, {limit: $top_k})
+            YIELD node, score RETURN node, score
+        }
+        WITH node, max(score) AS score ORDER BY score DESC LIMIT $top_k
+        OPTIONAL MATCH (node)-[:FROM_DOCUMENT]->(d:Document)
+        RETURN elementId(node) AS id, node.text AS text, score,
+               coalesce(d.source, d.path) AS source
+        """,
+        vector_index=VECTOR_INDEX_NAME,
+        fulltext_index=FULLTEXT_INDEX_NAME,
+        question=question,
+        vector=vector,
+        top_k=top_k,
+    )
+    chunks = []
+    for r in records:
+        text = (r["text"] or "").strip()
+        excerpt = text if len(text) <= CHUNK_EXCERPT else text[:CHUNK_EXCERPT].rstrip() + "…"
+        chunks.append(
+            {
+                "id": r["id"],
+                "label": "Chunk",
+                "name": r["source"] or "chunk",
+                "status": None,
+                "evidence_levels": [],
+                "description": excerpt,
+                "text": text,
+                "score": r["score"],
+                "source": r["source"],
+            }
+        )
+    return chunks
+
+
+def entities_from_chunks(chunk_ids: list[str]) -> tuple[list[dict], list[dict]]:
+    """Entities extracted from those chunks, plus one edge per (entity, chunk).
+
+    The edges are what make the second ring read as *derived from* the first
+    rather than merely next to it.
+    """
+    if not chunk_ids:
+        return [], []
+    records = run(
+        f"""
+        MATCH (n:__Entity__)-[:FROM_CHUNK]->(c) WHERE elementId(c) IN $ids
+        RETURN {NODE_PROJECTION}, collect(DISTINCT elementId(c)) AS chunks
+        """,
+        ids=chunk_ids,
+    )
+    nodes = [node_dict(r) for r in records]
+    links = [
+        {
+            "id": f"chunk:{chunk_id}->{r['id']}",
+            "from": chunk_id,
+            "to": r["id"],
+            "type": "MENTIONS",
+            "properties": {},
+        }
+        for r in records
+        for chunk_id in r["chunks"]
+    ]
+    return nodes, links
+
+
+#: How many of the surrounding entities the outer ring shows. Every retrieved
+#: entity has neighbours, so an uncapped ring is most of the graph again — which
+#: is both unreadable and a poor description of what the answer leaned on.
+NEIGHBOUR_LIMIT = 20
+
+
+def neighbours_of(entity_ids: list[str], limit: int = NEIGHBOUR_LIMIT) -> tuple[list[dict], int]:
+    """Entities one hop out from the retrieved ones — the graph's own contribution.
+
+    Ranked by how many of the retrieved entities each one ties together, so the
+    ring keeps the connectors and drops the long tail of single mentions.
+    Returns the capped list and the true total, so the caller can say what it cut.
+    """
+    if not entity_ids:
+        return [], 0
+    total = run(
+        """
+        MATCH (seed:__Entity__) WHERE elementId(seed) IN $ids
+        MATCH (seed)-[]-(n:__Entity__) WHERE NOT elementId(n) IN $ids
+        RETURN count(DISTINCT n) AS c
+        """,
+        ids=entity_ids,
+    )[0]["c"]
+    records = run(
+        f"""
+        MATCH (seed:__Entity__) WHERE elementId(seed) IN $ids
+        MATCH (seed)-[]-(n:__Entity__)
+        WHERE NOT elementId(n) IN $ids
+        WITH n, count(DISTINCT seed) AS ties
+        ORDER BY ties DESC, n.name
+        LIMIT $limit
+        RETURN {NODE_PROJECTION}, ties
+        """,
+        ids=entity_ids,
+        limit=limit,
+    )
+    return [node_dict(r) for r in records], total
+
+
+def relationships_among(ids: list[str]) -> list[dict]:
+    if not ids:
+        return []
+    records = run(
+        """
+        MATCH (a:__Entity__)-[r]->(b:__Entity__)
+        WHERE elementId(a) IN $ids AND elementId(b) IN $ids
+        RETURN elementId(r) AS id, elementId(a) AS source, elementId(b) AS target,
+               type(r) AS type, properties(r) AS props
+        """,
+        ids=ids,
+    )
+    return [
+        {
+            "id": r["id"],
+            "from": r["source"],
+            "to": r["target"],
+            "type": r["type"],
+            "properties": dict(r["props"] or {}),
+        }
+        for r in records
+    ]
+
+
+def sse(event: str, payload: dict) -> str:
+    """One Server-Sent Event. json.dumps escapes newlines, which SSE framing needs."""
+    return f"event: {event}\ndata: {json.dumps(payload)}\n\n"
+
+
+@app.post("/api/ask/stream")
+def ask_stream(req: AskRequest) -> StreamingResponse:
+    """The same answer as /api/ask, delivered one pipeline stage at a time.
+
+    The model is the slow part, so it starts first and runs on a worker thread
+    while the retrieval rings — chunks, then their entities, then the wider
+    neighbourhood — stream out ahead of it.
+    """
+    question = req.question.strip()
+    if not question:
+        raise HTTPException(400, "question is required")
+    rag = rag_for(req.retriever)          # raises 400 before the stream opens
+    config = {} if req.retriever == "text2cypher" else {"top_k": req.top_k}
+
+    def stages() -> Iterator[str]:
+        pool = ThreadPoolExecutor(max_workers=1)
+        try:
+            pending = pool.submit(
+                rag.search,
+                query_text=question,
+                retriever_config=config,
+                return_context=True,
+                response_fallback="Nothing in the graph covers that.",
+            )
+            yield sse("stage", {"name": "retrieving", "label": "Searching the corpus…"})
+
+            try:
+                chunks = retrieved_chunks(question, req.top_k)
+                yield sse(
+                    "unfold",
+                    {
+                        "stage": "evidence",
+                        "label": f"{len(chunks)} passages matched",
+                        "nodes": chunks,
+                        "relationships": [],
+                    },
+                )
+
+                entities, links = entities_from_chunks([c["id"] for c in chunks])
+                entity_ids = [e["id"] for e in entities]
+                yield sse(
+                    "unfold",
+                    {
+                        "stage": "entities",
+                        "label": f"{len(entities)} entities extracted from them",
+                        "nodes": entities,
+                        "relationships": links + relationships_among(entity_ids),
+                    },
+                )
+
+                yield sse("stage", {"name": "reasoning", "label": "Reasoning over the graph…"})
+
+                nbrs, total = neighbours_of(entity_ids)
+                label = (
+                    f"{len(nbrs)} of {total} connected entities the graph adds"
+                    if total > len(nbrs)
+                    else f"{len(nbrs)} connected entities the graph adds"
+                )
+                yield sse(
+                    "unfold",
+                    {
+                        "stage": "neighbourhood",
+                        "label": label,
+                        "truncated": total - len(nbrs),
+                        "nodes": nbrs,
+                        "relationships": relationships_among(
+                            entity_ids + [n["id"] for n in nbrs]
+                        ),
+                    },
+                )
+            except Exception as exc:                      # noqa: BLE001
+                # A failed ring must not cost the viewer the answer.
+                yield sse("warning", {"message": f"graph lookup failed: {exc}"})
+
+            result = pending.result()
+            items = result.retriever_result.items if result.retriever_result else []
+            yield sse(
+                "answer",
+                {
+                    "answer": result.answer,
+                    "context": [item.content for item in items],
+                },
+            )
+        except Exception as exc:                          # noqa: BLE001
+            yield sse("error", {"message": str(exc)})
+        finally:
+            pool.shutdown(wait=False)
+
+    return StreamingResponse(
+        stages(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.middleware("http")
