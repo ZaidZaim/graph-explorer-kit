@@ -6,7 +6,7 @@ single `PROJECT: ProjectSpec`.
 
 Select one with the GRAPHRAG_PROJECT environment variable:
 
-    GRAPHRAG_PROJECT=projects.vicecity
+    GRAPHRAG_PROJECT=projects.example
 
 To start a new demo, copy `projects/example`, swap the schema and the corpus,
 and point GRAPHRAG_PROJECT at it. No engine code changes.
@@ -71,7 +71,7 @@ def load_project(dotted_path: str | None = None) -> ProjectSpec:
     except ImportError as exc:
         raise ImportError(
             f"Could not import project {target!r}. Set GRAPHRAG_PROJECT to a "
-            f"package exposing PROJECT, e.g. 'projects.vicecity'."
+            f"package exposing PROJECT, e.g. 'projects.example'."
         ) from exc
     try:
         spec = module.PROJECT

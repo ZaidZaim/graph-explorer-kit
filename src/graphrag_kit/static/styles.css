@@ -1,5 +1,6 @@
-/* Vice City palette: neon on dusk. Dark-only by design — this is a presentation
-   surface, not a document, and the graph canvas reads badly on light ground. */
+/* Dark-only by design — this is a presentation surface, not a document, and the
+   graph canvas reads badly on light ground. The accents here are chrome; per-entity
+   node colours come from the project's `palette`. */
 :root {
   --bg:        #120b1e;
   --bg-2:      #1b1030;
