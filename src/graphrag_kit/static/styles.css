@@ -316,7 +316,15 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 
 /* ---------- stage ---------- */
 
-#stage { grid-area: stage; position: relative; overflow: hidden; background: var(--bg); }
+/* The stage is a column: the graph above, the dock below. The graph area is the
+   positioned parent for everything that floats over the canvas, and it is what
+   the canvas is sized to - so the dock never covers the graph, and the fit needs
+   no reservation for it. */
+#stage {
+  grid-area: stage; display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden; background: var(--bg);
+}
+#graph-area { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 #graph { position: absolute; inset: 0; }
 
 /* The faint horizontal banding the source site uses over its dark hero. Pure
@@ -356,49 +364,47 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* ---------- ask bar ---------- */
+/* ---------- dock: question, answer and prompts together ---------- */
 
-#ask-bar {
-  position: absolute; z-index: 6; left: 50%; transform: translateX(-50%);
-  bottom: 22px; width: min(760px, calc(100% - 44px));
+#dock {
+  flex: none; z-index: 6;
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 9px 20px 10px;
+  background: var(--bg-2);
+  border-top: 1px solid var(--rule);
 }
 #ask-form { display: flex; gap: 7px; }
 #ask-form input {
   flex: 1;
-  background: var(--panel); backdrop-filter: blur(12px);
+  background: rgba(0, 0, 0, 0.45);
   border: 1px solid var(--rule);
-  box-shadow: 0 14px 40px rgba(0, 0, 0, 0.6);
-  padding: 12px 15px; font-size: 12.5px; letter-spacing: 0.05em;
+  padding: 11px 14px; font-size: 12.5px; letter-spacing: 0.05em;
 }
 #ask-form select {
-  width: auto; background: var(--panel); backdrop-filter: blur(12px);
-  font-size: 10px; padding: 0 8px; text-transform: uppercase;
+  width: auto; font-size: 10px; padding: 0 8px; text-transform: uppercase;
 }
-#ask-form button { backdrop-filter: blur(12px); }
 
-.examples { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 8px; justify-content: center; }
+.examples { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
 .examples button {
-  background: rgba(8, 16, 33, 0.8); backdrop-filter: blur(8px);
+  background: rgba(0, 0, 0, 0.25);
   border-color: var(--rule-soft); color: var(--dim);
-  font-size: 9.5px; padding: 5px 10px; letter-spacing: 0.08em;
+  font-size: 9.5px; padding: 4px 10px; letter-spacing: 0.08em;
   text-transform: none;
 }
-.examples button:hover { color: var(--cyan); border-color: var(--cyan-deep); background: rgba(8, 16, 33, 0.9); }
+.examples button:hover { color: var(--cyan); border-color: var(--cyan-deep); }
 
-/* ---------- answer ---------- */
-
+/* The answer sits in the dock above the input, like a chat transcript. It is
+   capped to a share of the viewport and scrolls, so a long answer shrinks the
+   graph by a bounded amount rather than pushing it off the screen. */
 .answer {
-  position: absolute; z-index: 7; left: 20px; top: 20px;
-  width: min(430px, calc(100% - 40px));
-  /* The ask bar's real height, published by the app — the example chips wrap to
-     a different number of rows at every width, so a fixed allowance either
-     wastes space or lets the card run into the input. */
-  max-height: calc(100% - var(--ask-bar-h, 190px) - 40px);
-  overflow-y: auto;
-  background: var(--panel); backdrop-filter: blur(14px);
+  /* Bounded in pixels, not a share of the viewport: the answer scrolls, so it
+     needs only enough height to read comfortably, and every pixel it takes is
+     a pixel the graph above loses. At 34vh an open answer left a laptop-height
+     stage with 237px of graph. */
+  max-height: clamp(150px, 24vh, 240px); overflow-y: auto;
+  background: rgba(0, 0, 0, 0.28);
   border: 1px solid var(--rule); border-radius: var(--radius);
-  box-shadow: 0 18px 48px rgba(0, 0, 0, 0.65);
-  padding: 14px 16px;
+  padding: 12px 16px;
 }
 .answer header {
   display: flex; justify-content: space-between; align-items: center;
@@ -576,7 +582,8 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
   }
   #rail:focus-within, #rail:hover { transform: none; }
   #details { width: min(var(--detail), 100%); }
-  .answer { width: calc(100% - 40px); max-height: 40%; }
+  .answer { max-height: 30vh; }
+  #dock { padding: 9px 12px 10px; }
   .ident h1 { letter-spacing: 0.2em; font-size: 13px; }
   .stage-caption { display: none; }
 }

@@ -107,7 +107,10 @@ async function boot() {
 
     syncInsets();
     window.addEventListener('resize', syncInsets);
-    new ResizeObserver(syncInsets).observe($('answer'));
+    // The graph area changes size whenever the dock does - an answer arriving,
+    // or closing - with no window resize to hear about it.
+    new ResizeObserver(syncInsets).observe($('graph-area'));
+    new ResizeObserver(syncInsets).observe($('details'));
     // Dev affordance: inspect layout state from the console.
     window.__graphrag = { state, renderer: state.renderer };
     await refreshGraph();
@@ -152,26 +155,22 @@ function startClock() {
   setInterval(tick, 1000);
 }
 
-/** Tell the renderer which parts of the stage are covered by floating panels,
- *  so fitting the graph does not centre it under the answer card. */
+/** Tell the renderer which parts of the graph area are covered by a floating
+ *  panel, so fitting the graph does not centre it underneath one.
+ *
+ *  Little is covered now that the answer lives in the dock and the dock is in
+ *  the layout flow rather than over the canvas. The one case left is the record
+ *  detail panel, which becomes a fixed overlay on the right below 1240px. */
 function syncInsets() {
-  const stage = $('stage').getBoundingClientRect();
-  const answer = $('answer');
-  const askBar = $('ask-bar');
-  let left = 0, top = 0;
-  if (!answer.hidden) {
-    const r = answer.getBoundingClientRect();
-    // Below the narrow breakpoint the card spans the whole stage. Reserving its
-    // width there leaves a sliver and shoves the graph off the right edge, so
-    // reserve its height instead.
-    if (r.width > stage.width * 0.6) top = Math.max(0, r.bottom - stage.top + 16);
-    else left = Math.max(0, r.right - stage.left + 16);
+  const area = $('graph-area').getBoundingClientRect();
+  const details = $('details');
+  let right = 0;
+  if (!details.hidden) {
+    const r = details.getBoundingClientRect();
+    // Overlapping the graph area means it is the fixed overlay, not a column.
+    if (r.left < area.right) right = Math.max(0, area.right - r.left);
   }
-  const bottom = askBar ? stage.bottom - askBar.getBoundingClientRect().top + 12 : 0;
-  // Published for the answer card's max-height. Measured rather than assumed:
-  // the example chips wrap to a different number of rows at every width.
-  document.documentElement.style.setProperty('--ask-bar-h', `${Math.round(bottom)}px`);
-  state.renderer?.setInsets({ left, top, bottom: Math.max(0, bottom) });
+  state.renderer?.setInsets({ left: 0, top: 0, right, bottom: 0 });
   refitSoon();
 }
 
@@ -468,6 +467,7 @@ async function showTimeline() {
   state.renderer.unfold({ nodes: res.nodes, relationships: [] });
   for (const n of res.nodes) state.unfoldNodes.set(n.id, n);
   $('answer').hidden = false;
+  $('examples').hidden = true;
   $('answer-title').textContent = `Timeline · ${res.nodes.length} dated events`;
   $('progress').hidden = true;
   $('answer-body').className = 'log';
@@ -719,6 +719,7 @@ function finishProgress() {
 
 function closeAnswer() {
   $('answer').hidden = true;
+  $('examples').hidden = false;
   $('context-details').hidden = false;
   $('answer-body').className = '';
   setStage(null);
@@ -735,6 +736,7 @@ async function askQuestion() {
   btn.disabled = true;
   btn.textContent = 'Working';
   $('answer').hidden = false;
+  $('examples').hidden = true;
   $('answer-title').textContent = 'Answer';
   $('answer-body').className = '';
   $('context-details').hidden = false;
@@ -974,9 +976,12 @@ function wireEvents() {
   $('ask-form').addEventListener('submit', (e) => { e.preventDefault(); askQuestion(); });
   $('search').addEventListener('input', onSearch);
   $('close-details').addEventListener('click', hideDetails);
-  $('close-answer').addEventListener('click', () => {
+  $('close-answer').addEventListener('click', async () => {
+    // Back to the whole graph, whatever was on screen when the question was
+    // asked. Restoring a one-record neighbourhood there reads as the graph
+    // having vanished.
     closeAnswer();
-    state.renderer?.collapse();
+    await setGraphMode('all');
   });
   $('reset-view').addEventListener('click', async () => {
     closeAnswer();

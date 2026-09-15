@@ -95,44 +95,48 @@
 
   <!-- ── stage ────────────────────────────────────────────────────── -->
   <main id="stage">
-    <div id="graph"></div>
-    <div class="scanlines" aria-hidden="true"></div>
+    <!-- The graph takes the whole width above the dock. -->
+    <div id="graph-area">
+      <div id="graph"></div>
+      <div class="scanlines" aria-hidden="true"></div>
 
-    <p id="stage-caption" class="stage-caption" hidden></p>
-    <p id="stage-note" class="stage-note" hidden></p>
+      <p id="stage-caption" class="stage-caption" hidden></p>
+      <p id="stage-note" class="stage-note" hidden></p>
 
-    <div id="graph-empty" class="overlay" hidden>
-      <p>No records match these filters.</p>
+      <div id="graph-empty" class="overlay" hidden>
+        <p>No records match these filters.</p>
+      </div>
+
+      <div id="loading" class="overlay">
+        <div class="spinner"></div>
+        <p id="loading-text">Connecting to Aura&hellip;</p>
+      </div>
     </div>
 
-    <div id="loading" class="overlay">
-      <div class="spinner"></div>
-      <p id="loading-text">Connecting to Aura&hellip;</p>
-    </div>
+    <!-- Question, answer and prompts together, chat-style, under the graph. -->
+    <section id="dock">
+      <section id="answer" class="answer" hidden>
+        <header>
+          <h2 id="answer-title">Answer</h2>
+          <button id="close-answer" class="ghost small">close</button>
+        </header>
+        <div id="progress" class="progress" hidden>
+          <ol id="progress-steps" class="progress-steps"></ol>
+          <p id="answer-stage" class="stage-line"></p>
+        </div>
+        <div id="answer-body"></div>
+        <details id="context-details">
+          <summary>Retrieved context</summary>
+          <div id="answer-context"></div>
+        </details>
+      </section>
 
-    <div id="ask-bar">
       <form id="ask-form">
         <input id="question" type="text" autocomplete="off" placeholder="Ask the record&hellip;" />
         <select id="retriever" title="Retrieval strategy"></select>
         <button type="submit" id="ask-button">Ask</button>
       </form>
       <div id="examples" class="examples"></div>
-    </div>
-
-    <section id="answer" class="answer" hidden>
-      <header>
-        <h2 id="answer-title">Answer</h2>
-        <button id="close-answer" class="ghost small">close</button>
-      </header>
-      <div id="progress" class="progress" hidden>
-        <ol id="progress-steps" class="progress-steps"></ol>
-        <p id="answer-stage" class="stage-line"></p>
-      </div>
-      <div id="answer-body"></div>
-      <details id="context-details">
-        <summary>Retrieved context</summary>
-        <div id="answer-context"></div>
-      </details>
     </section>
   </main>
 

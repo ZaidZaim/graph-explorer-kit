@@ -431,6 +431,13 @@ function createCanvasRenderer(container, opts) {
       previous = r + (rows > 1 ? stagger : 0);
     }
 
+    // Open the fan across the longer axis of the canvas. A fan is roughly twice
+    // as long across its mouth as it is deep, so opening it rightward into a
+    // wide, short area wastes most of the width and is height-bound; rotated to
+    // open downward, the mouth spans the width and the depth fits the height.
+    const { w: cw, h: ch } = size();
+    const rot = cw > ch * 1.3 ? Math.PI / 2 : 0;
+
     const pos = new Map();
     const placedInRing = new Map(depths.map((d) => [d, 0]));
     const place = (id, a0, a1) => {
@@ -444,7 +451,7 @@ function createCanvasRenderer(container, opts) {
       const stagger = ringStagger.get(d) ?? ROW_STAGGER;
       const offset = ringRows.get(d) > 1 ? (i % 2 ? stagger : -stagger) : 0;
       const r = base > 0 ? base + offset : 0;
-      pos.set(id, { x: Math.cos(mid) * r, y: Math.sin(mid) * r });
+      pos.set(id, { x: Math.cos(mid + rot) * r, y: Math.sin(mid + rot) * r });
 
       const kids = children.get(id) ?? [];
       const total = kids.reduce((s, c) => s + (weight.get(c) ?? 1), 0) || 1;

@@ -216,6 +216,11 @@ Three views over the one graph, switched in the masthead:
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
+- **The question, the answer and the example prompts share one dock** under the
+  graph, chat-style, and the graph has the full width above it. The answer pane
+  is bounded and scrolls, so a long answer costs the graph a fixed amount of
+  height rather than a card's worth of width. Closing it returns to the whole
+  graph, whatever was showing when the question was asked.
 - **Ask a question** — the graph unfolds in step with the pipeline rather than
   redrawing once at the end: the matched passages first, then the entities
   extracted from them, then one hop of neighbours, while the model is still
