@@ -80,22 +80,16 @@ graphrag-agent --show-tools "Which agencies investigated the most events?"
 
 Three views over the one graph:
 
-* **Graph** — **types first.** One node per record type, sized by how many
-  records carry it, with each edge weighted by the relationships it stands for
-  (`MENTIONS ×349`). A thousand records drawn at once is a disc of overlapping
-  dots; rolled up by type it is a dozen nodes and the shape of the corpus is
-  obvious — Document mentions everything, Observation hangs off Event, Witness
-  hangs off Observation. Click a type to open its most connected records and
-  what they link to, which is where the sighting chain becomes visible as
-  clusters — then click one of *those* for a single record drawn the way Aura
-  draws it: the record in the middle, its neighbours around it, and every
-  relationship named. `All records` draws every one of them for the scale of it.
-  Records with no relationship at all are hidden by default and counted in the
-  rail: there are ~365, the residue of extraction finding a place name in a
-  scanned table with nothing to attach it to.
-
-  The three levels are the demo path — the shape of the corpus, then a type's
-  records, then one record's own neighbourhood.
+* **Graph** — every record, as the graph they form. Records with no
+  relationship at all are hidden by default and counted in the rail: there are
+  ~365, the residue of extraction finding a place name in a scanned table with
+  nothing to attach it to. `Types` rolls the same graph up to one node per type,
+  sized by how many records carry it, with each edge weighted by the
+  relationships it stands for (`MENTIONS ×349`) — Document mentions everything,
+  Observation hangs off Event, Witness hangs off Observation. Click a type for
+  its most connected records, then click one of *those* for a single record
+  drawn the way Aura draws it: the record in the middle, its neighbours around
+  it, and every relationship named.
 * **Schema** — the POLE model, one node per type, sized by how many records
   carry it, with the patterns the schema licenses as edges. Click a type for its
   properties and their meanings. This is the view for explaining the model.

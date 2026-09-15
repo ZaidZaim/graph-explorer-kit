@@ -58,9 +58,11 @@ const state = {
   graph: { nodes: [], relationships: [] },
   schema: null,
   view: 'graph',
-  // 'overview' draws one node per type, 'all' draws every record, and 'type'
-  // is the drill-down from overview into one type's records.
-  graphMode: 'overview',
+  // 'all' draws every record, 'overview' one node per type, and 'type' /
+  // 'record' are the drill-downs from the overview. The graph opens on the
+  // records: one node per type is what the Schema tab already shows, and the
+  // Graph tab should be the graph.
+  graphMode: 'all',
   drilledInto: null,
   focused: null,
   activeLabels: new Set(),
@@ -979,7 +981,7 @@ function wireEvents() {
   $('reset-view').addEventListener('click', async () => {
     closeAnswer();
     state.newIds = new Set();
-    state.graphMode = 'overview';
+    state.graphMode = 'all';
     state.drilledInto = null;
     state.focused = null;
     await setView('graph');

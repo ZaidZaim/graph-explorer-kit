@@ -212,7 +212,7 @@ Three views over the one graph, switched in the masthead:
 
 | View | What it shows |
 |---|---|
-| **Graph** | Three levels of the same graph. **Types** by default: one node per label, sized by how many records carry it, edges weighted by how many relationships they stand for. Click a type for **its records** and what they link to, then click one of those for **that record** — itself, its neighbours, and every relationship named. `All records` draws the whole thing. |
+| **Graph** | The records, by default — every one of them, as the graph they form. `Types` rolls it up to one node per label, sized by how many records carry it and with edges weighted by how many relationships they stand for; click a type for its records, then click a record for itself, its neighbours and every relationship named. |
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 

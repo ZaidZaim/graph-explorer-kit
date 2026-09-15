@@ -402,6 +402,7 @@ function createCanvasRenderer(container, opts) {
     // common case and reads as one blob without this.
     const ringR = new Map();
     const ringRows = new Map();
+    const ringStagger = new Map();
     let previous = 0;
     for (const d of depths) {
       const count = byDepth.get(d).length;
@@ -413,13 +414,21 @@ function createCanvasRenderer(container, opts) {
       // circle ends up on screen.
       const arc = captioned() ? CAPTION_RADIUS_UNFOLD * 2.6 : NODE_ARC;
       const needed = (count * arc) / (FAN_SPREAD * rows);
+      // Likewise the gap between rings and the stagger between a crowded ring's
+      // two rows: both were sized to clear labels hanging below radius-12 dots,
+      // and a radius-24 captioned circle needs the stagger to clear its own
+      // diameter — at the old 46 the two rows overlapped — but far less gap.
+      const gap = captioned() ? CAPTION_RADIUS_UNFOLD * 3.4 : RING_GAP;
+      const step = captioned() ? CAPTION_RADIUS_UNFOLD * 5 : RING_RADIUS;
+      const stagger = captioned() ? CAPTION_RADIUS_UNFOLD * 2.4 : ROW_STAGGER;
       const isHub = d === depths[0] && count === 1;
       const r = isHub
         ? 0
-        : Math.max(previous + RING_GAP, (d - depths[0]) * RING_RADIUS, needed);
+        : Math.max(previous + gap, (d - depths[0]) * step, needed);
       ringR.set(d, r);
       ringRows.set(d, rows);
-      previous = r + (rows > 1 ? ROW_STAGGER : 0);
+      ringStagger.set(d, stagger);
+      previous = r + (rows > 1 ? stagger : 0);
     }
 
     const pos = new Map();
@@ -432,7 +441,8 @@ function createCanvasRenderer(container, opts) {
       // Siblings are placed consecutively, so alternating the radius puts
       // angular neighbours on different rows without disturbing the order.
       const base = ringR.get(d) ?? 0;
-      const offset = ringRows.get(d) > 1 ? (i % 2 ? ROW_STAGGER : -ROW_STAGGER) : 0;
+      const stagger = ringStagger.get(d) ?? ROW_STAGGER;
+      const offset = ringRows.get(d) > 1 ? (i % 2 ? stagger : -stagger) : 0;
       const r = base > 0 ? base + offset : 0;
       pos.set(id, { x: Math.cos(mid) * r, y: Math.sin(mid) * r });
 
@@ -811,7 +821,11 @@ function createCanvasRenderer(container, opts) {
         // The circle itself is reserved, not just the text: a relationship type
         // printed across a node reads as that node's label.
         reserved.push(box ?? screenBox(n.x, n.y, r * 1.9, r * 1.9));
-        continue;
+        // A circle too small on screen to hold its caption is not left nameless:
+        // it gets the ordinary label underneath instead, subject to the usual
+        // collision rules. This is what a small window or a high zoom level
+        // sees, and a nameless circle there is worse than a crowded one.
+        if (box) continue;
       }
 
       // Ghosted nodes never label themselves during an unfold — the point of
