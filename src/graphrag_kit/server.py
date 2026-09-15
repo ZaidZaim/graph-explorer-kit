@@ -476,10 +476,9 @@ def graph(
 
 
 #: Instances drawn when drilling into one type. Each one brings its neighbours,
-#: so thirty Observations arrive as something closer to a hundred nodes — which
-#: is about where a force layout stops being a picture and starts being a blob.
-#: The true total goes back with them, so the view never implies it is showing
-#: everything.
+#: so thirty Observations arrive as roughly a hundred nodes — which is about
+#: where a force layout stops being a picture and starts being a blob. The true
+#: total goes back with them, so the view never implies it is showing everything.
 INSTANCE_LIMIT = 30
 
 

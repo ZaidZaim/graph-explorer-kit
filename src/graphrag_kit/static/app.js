@@ -47,7 +47,8 @@ const typeRadius = (count, max) => 11 + 26 * Math.sqrt(count / Math.max(max, 1))
 const CAPTIONS = {
   graph: 'One node per record type, sized by how many records carry it. Click a type to open its records.',
   graphAll: 'Every extracted record. Zoom in for names, or hover a node.',
-  graphType: 'The most connected records of one type, with what they link to. Reset view goes back.',
+  graphType: 'The most connected records of one type, with what they link to. Click one to open it.',
+  graphRecord: 'One record and everything it links to, with each relationship named.',
   schema: 'The POLE model this corpus is held to. Node size is how many records carry that type.',
   timeline: 'Events carrying a date, earliest first. Dates are as precise as the document allowed.',
 };
@@ -61,6 +62,7 @@ const state = {
   // is the drill-down from overview into one type's records.
   graphMode: 'overview',
   drilledInto: null,
+  focused: null,
   activeLabels: new Set(),
   activeStatuses: new Set(),
   // Entities with no relationship at all. A third of this corpus, and as a
@@ -163,7 +165,7 @@ function syncInsets() {
     if (r.width > stage.width * 0.6) top = Math.max(0, r.bottom - stage.top + 16);
     else left = Math.max(0, r.right - stage.left + 16);
   }
-  const bottom = askBar ? stage.bottom - askBar.getBoundingClientRect().top + 16 : 0;
+  const bottom = askBar ? stage.bottom - askBar.getBoundingClientRect().top + 12 : 0;
   state.renderer?.setInsets({ left, top, bottom: Math.max(0, bottom) });
   refitSoon();
 }
@@ -372,6 +374,11 @@ async function refreshGraph() {
       relationships: data.relationships,
     };
     setNote('Click a type to open its records');
+  } else if (state.graphMode === 'record' && state.focused) {
+    const data = await api(`/api/expand?id=${encodeURIComponent(state.focused)}`);
+    state.graph = { nodes: data.nodes, relationships: data.relationships };
+    const node = data.nodes.find((n) => n.id === state.focused);
+    setNote(`${node?.label ?? 'Record'}: ${data.nodes.length - 1} direct connections`);
   } else if (state.graphMode === 'type' && state.drilledInto) {
     const data = await api(`/api/instances?label=${encodeURIComponent(state.drilledInto)}`);
     state.graph = { nodes: data.nodes, relationships: data.relationships };
@@ -390,7 +397,8 @@ async function refreshGraph() {
   $('graph-empty').hidden = state.graph.nodes.length > 0;
   state.renderer.setGraph(state.graph);
   setCaption(CAPTIONS[
-    { overview: 'graph', type: 'graphType', all: 'graphAll' }[state.graphMode]]);
+    { overview: 'graph', type: 'graphType', all: 'graphAll', record: 'graphRecord' }[
+      state.graphMode]]);
   syncModeUi();
 }
 
@@ -408,6 +416,7 @@ function syncModeUi() {
 async function setGraphMode(mode) {
   state.graphMode = mode;
   state.drilledInto = null;
+  state.focused = null;
   if (state.view !== 'graph') { await setView('graph'); return; }
   await refreshGraph();
 }
@@ -416,8 +425,22 @@ async function setGraphMode(mode) {
 async function drillInto(label) {
   state.graphMode = 'type';
   state.drilledInto = label;
+  state.focused = null;
   hideDetails();
   await refreshGraph();
+}
+
+/** Open one record: itself, its neighbours, and every relationship named.
+ *
+ *  The third level of the same idea — types, then a type's records, then one
+ *  record — and the only one small enough that every circle carries its caption
+ *  and every edge carries its type. This is how a graph is meant to be read.
+ */
+async function focusRecord(id) {
+  state.graphMode = 'record';
+  state.focused = id;
+  await refreshGraph();
+  state.renderer.select(id);
 }
 
 /** The schema as a graph: one node per type, sized by how many records carry it,
@@ -479,6 +502,11 @@ async function showDetails(nodeId) {
   if (!node) return;
 
   if (node.label === 'Chunk') { showChunkDetails(node); return; }
+
+  const unfolding = !$('answer').hidden;
+  if (state.view === 'graph' && !unfolding && state.focused !== nodeId) {
+    focusRecord(nodeId);
+  }
 
   state.selected = nodeId;
   openDetails(node.label, state.meta.colors[node.label] ?? '#8894a8');
@@ -947,6 +975,7 @@ function wireEvents() {
     state.newIds = new Set();
     state.graphMode = 'overview';
     state.drilledInto = null;
+    state.focused = null;
     await setView('graph');
   });
   for (const b of document.querySelectorAll('#graph-mode button')) {

@@ -73,6 +73,25 @@ const NODE_RADIUS = 12;     // the radius a comfortable graph uses
 const COMFORTABLE = 70;     // nodes; at or below this, full size
 const DOT_MIN = 0.28;       // floor on the shrink factor
 
+// Below this many nodes the view switches to the convention Neo4j Browser and
+// Aura use: a big circle with its caption *inside* it, and every relationship
+// drawn with its type and an arrowhead. It is the right way to read a graph you
+// are actually studying — nothing has to be matched up with a legend, and the
+// direction of each edge is on the edge. It only works while the circles are
+// big enough to hold text, which is why it is a mode and not the only mode.
+// Thirty is about the ceiling: sixty captioned circles fill the stage and each
+// caption comes back to three characters, which is worse than no caption at all.
+const CAPTION_LIMIT = 30;     // nodes; at or below this, captions go inside
+const CAPTION_RADIUS = 34;    // world radius in that mode
+const CAPTION_LINES = 3;      // most lines of caption a circle will hold
+// Caption size follows the circle's size on screen rather than being fixed.
+// A fixed size fits at one zoom and truncates every caption to four characters
+// at any other — and how big the circles end up depends on the stage, the panel
+// insets and how many nodes there are, none of which are known in advance.
+const CAPTION_RATIO = 0.42;   // of the on-screen radius
+const CAPTION_MIN_PX = 6.5;
+const CAPTION_MAX_PX = 12;
+
 const EDGE_BOW = 0.10;      // how far an edge bows away from a straight chord
 
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
@@ -158,7 +177,14 @@ function createCanvasRenderer(container, opts) {
     const { w, h } = size();
     const n = Math.max(nodes.length, 1);
     const area = Math.max(w * h, 1);
-    return Math.max(34, Math.min(165, 0.9 * Math.sqrt(area / n)));
+    const ideal = Math.max(34, Math.min(165, 0.9 * Math.sqrt(area / n)));
+    // Captioned circles are much bigger than dots, so they need a floor of
+    // their own: without it a fifty-node view packs radius-34 circles at a
+    // spacing of seventy and they overlap. The multiplier leaves a gap of
+    // roughly a circle between neighbours, which is where the relationship
+    // types have to fit — pack them tighter and every type label collides with
+    // a circle and is dropped.
+    return captioned() ? Math.max(ideal, CAPTION_RADIUS * 3.3) : ideal;
   }
 
   /** Repulsion falls off as 1/d², so beyond a few multiples of the spacing it
@@ -594,6 +620,9 @@ function createCanvasRenderer(container, opts) {
 
   const isChunk = (n) => n.label === 'Chunk';
 
+  /** Whether to draw Browser-style: caption inside the circle, typed edges. */
+  const captioned = () => nodes.length <= CAPTION_LIMIT && !revealed;
+
   /** Shrink factor for the current graph size, 1 for anything comfortable. */
   function nodeScale() {
     const n = Math.max(nodes.length, 1);
@@ -603,7 +632,11 @@ function createCanvasRenderer(container, opts) {
   const baseRadius = (n) => {
     // An explicit radius means the view is encoding something in the size — the
     // record count, in the type views — so it is scaled but never overridden.
-    const nominal = n.radius ?? (n.id === selected ? 17 : isChunk(n) ? 15 : NODE_RADIUS);
+    // In caption mode it is only ever grown, never shrunk below what the text
+    // needs, or the caption would not fit in the thing it names.
+    const explicit = n.radius;
+    const nominal = explicit ?? (n.id === selected ? 17 : isChunk(n) ? 15 : NODE_RADIUS);
+    if (captioned()) return Math.max(explicit ?? 0, CAPTION_RADIUS);
     return nominal * nodeScale();
   };
   /** Grown by `appear` on the way in, and floored so a wide fan zoomed out to
@@ -631,6 +664,7 @@ function createCanvasRenderer(container, opts) {
     ctx.scale(view.scale, view.scale);
 
     // edges
+    const edgeLabels = [];
     for (const e of edges) {
       const a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) continue;
@@ -653,12 +687,12 @@ function createCanvasRenderer(container, opts) {
         : `rgba(255,255,255,${0.05 * g})`;
       strokeCurve(a, b, g);
 
-      if (lit && g > 0.98 && view.scale > 0.5) {
+      if (lit && g > 0.98 && (captioned() || view.scale > 0.5)) {
         const c = control(a, b);
         const ang = Math.atan2(b.y - c.y, b.x - c.x);   // tangent at the end
         const r = radius(b) + 4;
         const tx = b.x - Math.cos(ang) * r, ty = b.y - Math.sin(ang) * r;
-        ctx.fillStyle = flow ? 'rgba(255,77,157,0.5)' : 'rgba(255,255,255,0.34)';
+        ctx.fillStyle = flow ? 'rgba(110,231,255,0.65)' : 'rgba(196,214,236,0.42)';
         ctx.beginPath();
         ctx.moveTo(tx, ty);
         ctx.lineTo(tx - Math.cos(ang - 0.4) * 9, ty - Math.sin(ang - 0.4) * 9);
@@ -666,21 +700,28 @@ function createCanvasRenderer(container, opts) {
         ctx.closePath();
         ctx.fill();
       }
-      if (lit && g > 0.98 && view.scale > 1.05) {
-        ctx.save();
-        ctx.font = `${9 / view.scale}px "IBM Plex Mono", ui-monospace, monospace`;
-        ctx.fillStyle = 'rgba(43,217,196,0.75)';
-        ctx.textAlign = 'center';
+      // The relationship type, on the relationship. Previously this needed
+      // view.scale > 1.05, which a graph fitted to the stage never reaches — so
+      // the types were effectively never drawn. Now they appear whenever the
+      // graph is small enough to be read, which is the case that wants them.
+      // Collected rather than drawn: they have to be placed after the node
+      // captions, so that a type never lands on top of a node's own name.
+      if (lit && g > 0.98 && (captioned() || view.scale > 1.05)) {
         // Midpoint of the quadratic, not of the chord.
         const c2 = control(a, b);
-        ctx.fillText(e.type, 0.25 * a.x + 0.5 * c2.x + 0.25 * b.x,
-                             0.25 * a.y + 0.5 * c2.y + 0.25 * b.y - 4);
-        ctx.restore();
+        edgeLabels.push({
+          text: e.type,
+          x: 0.25 * a.x + 0.5 * c2.x + 0.25 * b.x,
+          y: 0.25 * a.y + 0.5 * c2.y + 0.25 * b.y,
+          weight: e.properties?.count ?? 0,
+          flow,
+        });
       }
     }
 
     // nodes
     const deferredLabels = [];
+    const reserved = [];
     for (const n of nodes) {
       const appear = n.appear ?? 1;
       if (appear <= 0.02) continue;
@@ -720,6 +761,16 @@ function createCanvasRenderer(container, opts) {
       ctx.stroke();
       ctx.globalAlpha = 1;
 
+      // Browser-style: the caption lives inside the circle it names, so there
+      // is nothing to match up against a legend and nothing to collide with.
+      if (captioned()) {
+        const box = drawCaptionInside(n, r, lit ? base : GHOST_FILL, lit ? 1 : 0.5);
+        // The circle itself is reserved, not just the text: a relationship type
+        // printed across a node reads as that node's label.
+        reserved.push(box ?? screenBox(n.x, n.y, r * 1.9, r * 1.9));
+        continue;
+      }
+
       // Ghosted nodes never label themselves during an unfold — the point of
       // ghosting is to get the rest of the graph out of the way. Inside the
       // unfold, the outer rings drop their labels once the view is wide enough
@@ -739,7 +790,53 @@ function createCanvasRenderer(container, opts) {
       if (showLabel) deferredLabels.push({ n, r, alpha: lit ? appear : 0.4, named });
     }
 
+    drawEdgeLabels(edgeLabels, reserved);
     drawLabels(deferredLabels);
+    ctx.restore();
+  }
+
+  /** A screen-space box around a world-space centre. */
+  function screenBox(x, y, w, h) {
+    return {
+      x: x * view.scale + view.x - (w * view.scale) / 2,
+      y: y * view.scale + view.y - (h * view.scale) / 2,
+      w: w * view.scale,
+      h: h * view.scale,
+    };
+  }
+
+  const overlaps = (a, b) =>
+    a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+
+  /** Relationship types, heaviest first, skipping any that would collide.
+   *
+   *  Every edge labelled is how the middle of a hub-and-spoke graph turns into
+   *  a pile of overstruck words: fourteen MENTIONS edges leave Document, and
+   *  their midpoints are all in the same small area. Placing them in weight
+   *  order means the labels that survive are the ones standing for the most
+   *  relationships. */
+  function drawEdgeLabels(candidates, reserved) {
+    if (!candidates.length) return;
+    const px = (v) => v / view.scale;
+    candidates.sort((a, b) => b.weight - a.weight);
+    const placed = [...reserved];
+    ctx.save();
+    ctx.font = `${px(8.5)}px "IBM Plex Mono", ui-monospace, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    for (const item of candidates) {
+      const w = ctx.measureText(item.text).width;
+      const box = screenBox(item.x, item.y, w + px(6), px(12));
+      if (placed.some((other) => overlaps(box, other))) continue;
+      placed.push(box);
+      // Stroked in the stage colour so the line does not run through the
+      // middle of the word.
+      ctx.lineWidth = px(3.5);
+      ctx.strokeStyle = STAGE_BG;
+      ctx.strokeText(item.text, item.x, item.y);
+      ctx.fillStyle = item.flow ? 'rgba(110,231,255,0.9)' : 'rgba(148,170,196,0.95)';
+      ctx.fillText(item.text, item.x, item.y);
+    }
     ctx.restore();
   }
 
@@ -778,6 +875,81 @@ function createCanvasRenderer(container, opts) {
       placed.push({ x, y, w, h });
       drawLabel(n, r, alpha, named);
     }
+  }
+
+  /** Break a caption into lines that fit inside a circle of radius `r`.
+   *
+   *  The usable width is taken as a chord rather than the diameter, because
+   *  text set to the full width of a circle overhangs it at the top and bottom
+   *  lines. Words longer than a line are cut with an ellipsis rather than
+   *  overflowing, and a caption too long for `CAPTION_LINES` ends in one.
+   */
+  function wrapCaption(text, r, font) {
+    ctx.font = font;
+    const width = r * 1.55;
+    const words = String(text ?? '').split(/\s+/).filter(Boolean);
+    const lines = [];
+    let line = '';
+    const fits = (candidate) => ctx.measureText(candidate).width <= width;
+
+    for (const word of words) {
+      const candidate = line ? `${line} ${word}` : word;
+      if (fits(candidate)) { line = candidate; continue; }
+      if (line) lines.push(line);
+      if (lines.length === CAPTION_LINES) { line = ''; break; }
+      // A single word wider than the line gets truncated to fit.
+      line = word;
+      if (!fits(line)) {
+        let cut = word;
+        while (cut.length > 1 && !fits(`${cut}…`)) cut = cut.slice(0, -1);
+        line = `${cut}…`;
+      }
+    }
+    if (line && lines.length < CAPTION_LINES) lines.push(line);
+    if (lines.length === CAPTION_LINES && words.length) {
+      // Mark that something was dropped, rather than ending mid-thought.
+      const joined = lines.join(' ');
+      if (joined.length < String(text).length && !lines[lines.length - 1].endsWith('…')) {
+        let last = lines[lines.length - 1];
+        while (last.length > 1 && !fits(`${last}…`)) last = last.slice(0, -1);
+        lines[lines.length - 1] = `${last}…`;
+      }
+    }
+    return lines;
+  }
+
+  /** Relative luminance of a fill, for choosing readable text over it. */
+  function isLight(color) {
+    const m = /^#?([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(color);
+    if (!m) return false;
+    const [r, g, b] = m.slice(1).map((h) => parseInt(h, 16) / 255);
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.55;
+  }
+
+  /** The caption, centred inside its own circle. */
+  function drawCaptionInside(n, r, fill, alpha) {
+    const px = (v) => v / view.scale;
+    const onScreen = r * view.scale;
+    const size = Math.max(CAPTION_MIN_PX, Math.min(CAPTION_MAX_PX, onScreen * CAPTION_RATIO));
+    // Below this the text would be unreadable anyway, and a circle full of
+    // grey mush is worse than a plain circle.
+    if (onScreen < 11) return null;
+    const font = `${px(size)}px "IBM Plex Mono", ui-monospace, monospace`;
+    const lines = wrapCaption(n.name, r, font);
+    if (!lines.length) return null;
+    const lineHeight = px(size * 1.3);
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = font;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    // Dark text on the light fills, light text on the dark ones, so every
+    // POLE colour stays readable without a second palette.
+    ctx.fillStyle = isLight(fill) ? 'rgba(2,6,22,0.92)' : 'rgba(255,255,255,0.94)';
+    const top = n.y - ((lines.length - 1) * lineHeight) / 2;
+    lines.forEach((line, i) => ctx.fillText(line, n.x, top + i * lineHeight));
+    ctx.restore();
+    return screenBox(n.x, n.y, r * 1.9, r * 1.9);
   }
 
   /** One node label, stroked in the stage colour so it survives over an edge.

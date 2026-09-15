@@ -212,7 +212,7 @@ Three views over the one graph, switched in the masthead:
 
 | View | What it shows |
 |---|---|
-| **Graph** | Types by default — one node per label, sized by how many records carry it, with edges weighted by how many relationships they stand for. Click a type to open its most connected records and what they link to; `All records` draws every one of them. |
+| **Graph** | Three levels of the same graph. **Types** by default: one node per label, sized by how many records carry it, edges weighted by how many relationships they stand for. Click a type for **its records** and what they link to, then click one of those for **that record** — itself, its neighbours, and every relationship named. `All records` draws the whole thing. |
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
@@ -230,6 +230,12 @@ Three views over the one graph, switched in the masthead:
   from the live graph. Entities with no relationship at all are excluded by
   default and offered as their own toggle: on a large extracted corpus they can
   be a third of the nodes and they bury the structure worth looking at.
+- **Small graphs are drawn the way Neo4j Browser and Aura draw them**: a big
+  circle with its caption inside it, every relationship carrying its type and an
+  arrowhead. Nothing has to be matched against a legend and the direction of an
+  edge is on the edge. Above about thirty nodes the circles can no longer hold
+  text, so the view switches to dots with labels outside — captions in circles
+  that small are three characters and a worse picture than none.
 - **Nodes and edges scale to the size of the graph.** A thousand records drawn
   at the radius that suits thirty is a mass of overlapping discs with no gaps
   for the edges to show through, and eight hundred edges at the weight that
