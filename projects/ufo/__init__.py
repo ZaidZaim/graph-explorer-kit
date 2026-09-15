@@ -176,12 +176,12 @@ PROJECT = ProjectSpec(
         "QUERY: MATCH (o:Observation) WHERE o.shape IS NOT NULL "
         "RETURN o.shape, count(*) AS reports ORDER BY reports DESC",
     ],
+    # Four, not six. Each one is a sentence, and six of them wrap to four rows
+    # of chips at laptop width — a third of the stage spent on prompts.
     example_questions=[
         "Show observations where the object moved unusually or at speed",
         "What did witnesses report over New Mexico in 1949?",
         "Which agencies investigated the most events?",
-        "Which documents are still marked classified?",
-        "What shapes were reported, and how often?",
         "Where does the record contradict itself?",
     ],
 )

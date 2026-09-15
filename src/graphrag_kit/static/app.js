@@ -166,6 +166,9 @@ function syncInsets() {
     else left = Math.max(0, r.right - stage.left + 16);
   }
   const bottom = askBar ? stage.bottom - askBar.getBoundingClientRect().top + 12 : 0;
+  // Published for the answer card's max-height. Measured rather than assumed:
+  // the example chips wrap to a different number of rows at every width.
+  document.documentElement.style.setProperty('--ask-bar-h', `${Math.round(bottom)}px`);
   state.renderer?.setInsets({ left, top, bottom: Math.max(0, bottom) });
   refitSoon();
 }

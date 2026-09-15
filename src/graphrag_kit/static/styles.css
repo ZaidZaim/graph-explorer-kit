@@ -389,7 +389,11 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 
 .answer {
   position: absolute; z-index: 7; left: 20px; top: 20px;
-  width: min(430px, calc(100% - 40px)); max-height: calc(100% - 190px);
+  width: min(430px, calc(100% - 40px));
+  /* The ask bar's real height, published by the app — the example chips wrap to
+     a different number of rows at every width, so a fixed allowance either
+     wastes space or lets the card run into the input. */
+  max-height: calc(100% - var(--ask-bar-h, 190px) - 40px);
   overflow-y: auto;
   background: var(--panel); backdrop-filter: blur(14px);
   border: 1px solid var(--rule); border-radius: var(--radius);

@@ -461,14 +461,25 @@ function createCanvasRenderer(container, opts) {
     if (pad === null) pad = Math.max(26, Math.min(70, 0.055 * Math.min(w, h)));
 
     // Usable area is the viewport minus whatever panels currently cover it.
+    // On a small stage the answer card and the ask bar can between them claim
+    // more than the whole height; clamping the floor alone is not enough,
+    // because the centre is then computed below the viewport and the graph is
+    // drawn underneath the ask bar. Give the card's reservation up first — it
+    // is translucent and scrollable, so a little overlap costs nothing, whereas
+    // a graph hidden behind the input is simply gone.
+    let reserveTop = insets.top;
+    const MIN_USABLE = 190;
+    if (h - reserveTop - insets.bottom < MIN_USABLE) {
+      reserveTop = Math.max(0, h - insets.bottom - MIN_USABLE);
+    }
     const availW = Math.max(200, w - insets.left - insets.right - pad * 2);
-    const availH = Math.max(200, h - insets.top - insets.bottom - pad * 2);
+    const availH = Math.max(200, h - reserveTop - insets.bottom - pad * 2);
     camera.scale = Math.min(1.9, Math.max(0.12, Math.min(
       availW / Math.max(MIN_EXTENT, maxX - minX),
       availH / Math.max(MIN_EXTENT, maxY - minY))));
 
     const cx = insets.left + pad + availW / 2;
-    const cy = insets.top + pad + availH / 2;
+    const cy = reserveTop + pad + availH / 2;
     camera.x = cx - ((minX + maxX) / 2) * camera.scale;
     camera.y = cy - ((minY + maxY) / 2) * camera.scale;
     camera.active = true;
