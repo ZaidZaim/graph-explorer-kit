@@ -981,6 +981,10 @@ function wireEvents() {
     // asked. Restoring a one-record neighbourhood there reads as the graph
     // having vanished.
     closeAnswer();
+    // Collapse first, from memory, so the standing graph is back the instant
+    // the button is clicked; the refresh that follows re-syncs it with the
+    // server, which on a remote Aura instance can take a few seconds.
+    state.renderer?.collapse();
     await setGraphMode('all');
   });
   $('reset-view').addEventListener('click', async () => {

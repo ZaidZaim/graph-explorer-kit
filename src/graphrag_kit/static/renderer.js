@@ -435,6 +435,13 @@ function createCanvasRenderer(container, opts) {
         }
       : { x: 0, y: 0 };
 
+    // The layout belongs to the revealed nodes alone. Anything not revealed is
+    // a ghost and holds still — asserted here, after the merge, so it cannot
+    // depend on what the merge preserved.
+    for (const n of nodes) {
+      if (!revealed.has(n.id)) { n.pinned = true; n.targetAppear = GHOST_ALPHA; }
+    }
+
     const now = performance.now();
     const k = spacing();
     for (const id of revealed) {
@@ -971,7 +978,15 @@ function createCanvasRenderer(container, opts) {
       const hit = pick(p.x, p.y);
       hit ? opts.onNodeClick?.(hit.id) : opts.onBackgroundClick?.();
     }
-    if (dragging && !revealed?.has(dragging.id)) dragging.pinned = false;
+    // A dropped node goes back into the simulation. Only ghosts stay pinned:
+    // they are the frozen backdrop of an unfold, not part of its layout. This
+    // used to keep revealed nodes pinned too, because the fan needed them held
+    // at their targets — a force layout wants the opposite, so the graph reacts
+    // to where you put a node rather than leaving a hole where it was.
+    if (dragging) {
+      dragging.pinned = isGhost(dragging);
+      alpha = Math.max(alpha, 0.35);
+    }
     dragging = null; panning = false; last = null;
     canvas.style.cursor = 'grab';
     canvas.releasePointerCapture(ev.pointerId);
@@ -1013,9 +1028,13 @@ function createCanvasRenderer(container, opts) {
         x: old?.x ?? Math.cos(angle) * 260 + (Math.random() - 0.5) * 40,
         y: old?.y ?? Math.sin(angle) * 260 + (Math.random() - 0.5) * 40,
         vx: 0, vy: 0,
-        pinned: false,
+        // Carried over when a node already exists. Re-adopting mid-unfold must
+        // not unfreeze the ghosts or brighten them: with these reset, every
+        // stage put all seven hundred background nodes back into the layout the
+        // revealed ones were supposed to have to themselves.
+        pinned: old?.pinned ?? false,
         appear: old?.appear ?? 0,
-        targetAppear: 1,
+        targetAppear: old?.targetAppear ?? 1,
       };
     });
     byId = new Map(nodes.map((n) => [n.id, n]));
@@ -1081,6 +1100,10 @@ function createCanvasRenderer(container, opts) {
       revealed: revealed ? revealed.size : null,
       nodes: nodes.length,
       pinned: nodes.filter((n) => n.pinned).length,
+      // The two numbers that say whether this is a force layout right now: how
+      // many nodes the simulation is moving, and how much heat it has left.
+      free: nodes.filter((n) => !n.pinned).length,
+      alpha: Number(alpha.toFixed(3)),
       stages: [...stageOf.values()].reduce((acc, stage) => {
         acc[stage] = (acc[stage] ?? 0) + 1;
         return acc;
