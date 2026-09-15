@@ -186,10 +186,11 @@ function createCanvasRenderer(container, opts) {
     // roughly a circle between neighbours, which is where the relationship
     // types have to fit — pack them tighter and every type label collides with
     // a circle and is dropped.
-    // 2.6 radii between centres leaves a gap of about half a circle, which is
-    // the density Browser draws a result at: close enough to read as one
-    // picture, open enough for a type label between two circles.
-    return captioned() ? Math.max(ideal, CAPTION_RADIUS * 2.6) : ideal;
+    // 3.4 radii between centres leaves a gap of about a circle and a half,
+    // which is the density Browser draws a result at: close enough to read as
+    // one picture, open enough for a relationship type to sit between two
+    // circles without touching either.
+    return captioned() ? Math.max(ideal, CAPTION_RADIUS * 3.4) : ideal;
   }
 
   /** Repulsion falls off as 1/d², so beyond a few multiples of the spacing it
@@ -248,14 +249,21 @@ function createCanvasRenderer(container, opts) {
     // disconnected components drifting apart for ever, but at full strength on
     // a thousand nodes it packs every component into one ball and hides the
     // cluster structure that makes the picture worth looking at.
-    const pull = visibleCount() > 200 ? 0.004 : 0.012;
+    // Gravity is what packs a layout. On a captioned result it is kept weak:
+    // strong enough to hold disconnected pieces together, too weak to pull
+    // nodes inside their spring length. At 0.012 the circles settled nearly
+    // touching and the fit zoomed into the clump — Browser's result view has a
+    // diameter or more of air between neighbours, which is where the
+    // relationship types live.
+    const pull = captioned() ? 0.0032 : visibleCount() > 200 ? 0.004 : 0.012;
     // Gravity is anisotropic: it pulls harder along the canvas's shorter axis.
     // A force layout settles into a disc, and a disc fitted into a wide, short
     // area is height-bound with two thirds of the width empty. Squeezing it
     // vertically in proportion to the aspect ratio gives an ellipse the shape
-    // of the stage, which is what lets the circles be drawn large.
+    // of the stage. Gentler on a captioned result, where the squeeze also
+    // pushes circles into each other.
     const { w: gw, h: gh } = size();
-    const aspect = Math.min(2.4, Math.max(1, gw / Math.max(gh, 1)));
+    const aspect = Math.min(captioned() ? 1.6 : 2.4, Math.max(1, gw / Math.max(gh, 1)));
     for (const n of free) {
       n.vx -= n.x * pull;
       n.vy -= n.y * pull * aspect;
@@ -1104,6 +1112,23 @@ function createCanvasRenderer(container, opts) {
       // many nodes the simulation is moving, and how much heat it has left.
       free: nodes.filter((n) => !n.pinned).length,
       alpha: Number(alpha.toFixed(3)),
+      // Mean nearest-neighbour distance among the free nodes, in node radii.
+      // Around 2 the circles touch; Browser's result view sits near 3.5-4.
+      spread: (() => {
+        const free = nodes.filter((n) => !n.pinned);
+        if (free.length < 2) return null;
+        let total = 0;
+        for (const a of free) {
+          let best = Infinity;
+          for (const b of free) {
+            if (b === a) continue;
+            best = Math.min(best, Math.hypot(a.x - b.x, a.y - b.y));
+          }
+          total += best;
+        }
+        const r = captioned() ? CAPTION_RADIUS : NODE_RADIUS * nodeScale();
+        return Number((total / free.length / r).toFixed(2));
+      })(),
       stages: [...stageOf.values()].reduce((acc, stage) => {
         acc[stage] = (acc[stage] ?? 0) + 1;
         return acc;
