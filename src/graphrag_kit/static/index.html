@@ -4,51 +4,101 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Knowledge Graph Explorer</title>
-<link rel="stylesheet" href="/static/styles.css?v=3" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400;500&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="/static/styles.css?v=4" />
 </head>
 <body>
 <div id="app">
 
-  <aside id="sidebar">
-    <header class="brand">
+  <!-- ── masthead ─────────────────────────────────────────────────── -->
+  <header id="masthead">
+    <div class="seal" aria-hidden="true"></div>
+    <div class="ident">
       <h1 id="brand-title">&nbsp;</h1>
       <p id="brand-subtitle">&nbsp;</p>
-    </header>
+    </div>
 
+    <nav id="views" aria-label="View">
+      <button type="button" class="view-tab is-active" data-view="graph">Graph</button>
+      <button type="button" class="view-tab" data-view="schema">Schema</button>
+      <button type="button" class="view-tab" data-view="timeline">Timeline</button>
+    </nav>
+
+    <dl id="hud" aria-label="Corpus readout">
+      <div><dt>Records</dt><dd id="hud-records">—</dd></div>
+      <div><dt>Links</dt><dd id="hud-links">—</dd></div>
+      <div><dt>Documents</dt><dd id="hud-docs">—</dd></div>
+      <div class="hud-clock"><dt>UTC</dt><dd id="hud-clock">--:--:--</dd></div>
+    </dl>
+  </header>
+
+  <!-- ── left rail ────────────────────────────────────────────────── -->
+  <aside id="rail">
     <section class="panel">
       <label class="field">
-        <span>Search entities</span>
-        <input id="search" type="search" placeholder="Search the graph&hellip;" autocomplete="off" />
+        <span>Search the record</span>
+        <input id="search" type="search" placeholder="Name, place, claim&hellip;" autocomplete="off" />
       </label>
       <ul id="search-results" class="results" hidden></ul>
     </section>
 
-    <section class="panel">
-      <h2>Entities <span class="hint">click to filter</span></h2>
-      <ul id="label-filters" class="filters"></ul>
+    <section class="panel" id="pole-panel">
+      <h2>POLE <span class="hint">click to filter</span></h2>
+      <div id="pole-groups" class="pole"></div>
+      <ul class="filters" id="structure-filters">
+        <li id="isolated-toggle" class="is-off" title="Records the extraction could not attach to anything">
+          <span class="dot"></span>
+          <span>Unlinked records</span>
+          <span class="count" id="isolated-count">0</span>
+        </li>
+      </ul>
     </section>
 
-    <section class="panel">
-      <h2>Evidence <span class="hint">what we actually know</span></h2>
+    <section class="panel" id="evidence-panel" hidden>
+      <h2>Evidence <span class="hint">what we know</span></h2>
       <ul id="status-filters" class="filters"></ul>
     </section>
 
     <section class="panel">
       <h2>Corpus</h2>
       <dl id="stats" class="stats"></dl>
+      <details id="sources-details">
+        <summary>Source documents</summary>
+        <ul id="sources" class="sources"></ul>
+      </details>
+    </section>
+
+    <section class="panel" id="extend-panel">
+      <h2>Extend the graph</h2>
+      <p class="note">
+        A new document is chunked, embedded and extracted against the same POLE
+        schema, then merged into the graph you are looking at.
+      </p>
+      <label id="drop-zone" for="upload-input" tabindex="0">
+        <strong>Add a document</strong>
+        <span id="upload-hint">Drop a file, or click to choose</span>
+        <input id="upload-input" type="file" hidden />
+      </label>
+      <ul id="upload-log" class="upload-log" hidden></ul>
     </section>
 
     <footer class="panel foot">
       <button id="reset-view" class="ghost">Reset view</button>
-      <button id="show-timeline" class="ghost">Timeline</button>
     </footer>
   </aside>
 
+  <!-- ── stage ────────────────────────────────────────────────────── -->
   <main id="stage">
     <div id="graph"></div>
+    <div class="scanlines" aria-hidden="true"></div>
+
+    <p id="stage-caption" class="stage-caption" hidden></p>
+    <p id="stage-note" class="stage-note" hidden></p>
 
     <div id="graph-empty" class="overlay" hidden>
-      <p>No nodes match these filters.</p>
+      <p>No records match these filters.</p>
     </div>
 
     <div id="loading" class="overlay">
@@ -58,8 +108,7 @@
 
     <div id="ask-bar">
       <form id="ask-form">
-        <input id="question" type="text" autocomplete="off"
-               placeholder="Ask the graph&hellip;" />
+        <input id="question" type="text" autocomplete="off" placeholder="Ask the record&hellip;" />
         <select id="retriever" title="Retrieval strategy"></select>
         <button type="submit" id="ask-button">Ask</button>
       </form>
@@ -68,10 +117,13 @@
 
     <section id="answer" class="answer" hidden>
       <header>
-        <h2>Answer</h2>
+        <h2 id="answer-title">Answer</h2>
         <button id="close-answer" class="ghost small">close</button>
       </header>
-      <p id="answer-stage" class="stage-line" hidden></p>
+      <div id="progress" class="progress" hidden>
+        <ol id="progress-steps" class="progress-steps"></ol>
+        <p id="answer-stage" class="stage-line"></p>
+      </div>
       <div id="answer-body"></div>
       <details id="context-details">
         <summary>Retrieved context</summary>
@@ -80,20 +132,22 @@
     </section>
   </main>
 
+  <!-- ── record detail ────────────────────────────────────────────── -->
   <aside id="details" hidden>
     <header>
       <span id="detail-label" class="pill"></span>
       <button id="close-details" class="ghost small">close</button>
     </header>
+    <p id="detail-group" class="group-line"></p>
     <h2 id="detail-name"></h2>
-    <p id="detail-status" class="evidence"></p>
+    <p id="detail-status" class="evidence" hidden></p>
     <p id="detail-description"></p>
     <dl id="detail-props" class="props"></dl>
-    <h3>Connections</h3>
+    <h3 id="detail-rels-heading">Connections</h3>
     <ul id="detail-rels" class="rels"></ul>
   </aside>
 
 </div>
-<script type="module" src="/static/app.js?v=3"></script>
+<script type="module" src="/static/app.js?v=4"></script>
 </body>
 </html>

@@ -25,9 +25,15 @@
 const NVL_URL = 'https://esm.sh/@neo4j-nvl/base@1.2.1';
 const NVL_INTERACTIONS_URL = 'https://esm.sh/@neo4j-nvl/interaction-handlers@1.2.1';
 
-const STATUS_RING = { confirmed: '#2bd9c4', reported: '#ffc857', rumored: '#ff5a6e' };
+const STATUS_RING = { confirmed: '#4ADE80', reported: '#FFB454', rumored: '#FF5A6E' };
 
-const CHUNK_RING = 'rgba(255,255,255,0.34)';
+// Ground colour of the stage. Node labels are stroked in it so they stay
+// readable over an edge, and ghosted nodes fade towards it.
+const STAGE_BG = '#020616';
+const GHOST_FILL = '#111a2b';
+const ACCENT = '#6EE7FF';
+
+const CHUNK_RING = 'rgba(110,231,255,0.55)';
 
 // Unfold timing, milliseconds.
 const NODE_FADE = 520;      // how long a node takes to arrive
@@ -57,6 +63,16 @@ const clamp01 = (v) => (v < 0 ? 0 : v > 1 ? 1 : v);
 /** Per-frame lerp rate corrected for elapsed time, so easing takes the same
  *  wall-clock duration at 60fps and at 5fps. */
 const rate = (perFrame, dt) => 1 - Math.pow(1 - perFrame, Math.max(dt, 1) / 16.67);
+
+/** A darker cousin of a hex colour, for the ring around a node of that colour. */
+function shade(hex, factor = 0.62) {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex);
+  if (!m) return hex;
+  const v = parseInt(m[1], 16);
+  const parts = [(v >> 16) & 255, (v >> 8) & 255, v & 255].map((c) =>
+    Math.round(c * factor));
+  return `rgb(${parts.join(',')})`;
+}
 
 export async function createRenderer(container, opts) {
   if (new URLSearchParams(location.search).get('renderer') === 'nvl') {
@@ -110,23 +126,63 @@ function createCanvasRenderer(container, opts) {
 
   let alpha = 1;
 
+  /** Ideal separation, from the space available and the number of things in it.
+   *
+   *  A fixed spring length is fine for a demo corpus of thirty nodes and wrong
+   *  for a thousand: repulsion then holds every pair apart at the same distance
+   *  and the graph settles into an evenly spaced lattice, which is the least
+   *  informative arrangement of a graph there is. Scaling with sqrt(area/n)
+   *  keeps the whole graph roughly stage-sized whatever its size, which is what
+   *  lets clusters read as clusters.
+   */
+  function spacing() {
+    const { w, h } = size();
+    const n = Math.max(nodes.length, 1);
+    const area = Math.max(w * h, 1);
+    return Math.max(34, Math.min(165, 0.9 * Math.sqrt(area / n)));
+  }
+
+  /** Repulsion falls off as 1/d², so beyond a few multiples of the spacing it
+   *  is noise. Bucketing by a grid of that size turns an O(n²) sweep into a
+   *  handful of neighbour checks per node — at a thousand nodes the difference
+   *  is a layout that settles in a second rather than a quarter of a million
+   *  force calculations every frame. What the cutoff drops is global spread,
+   *  and the centre gravity below already does that job. */
+  const REPULSION_CUTOFF = 3;
+
   function physics() {
     if (alpha <= 0.002) return;
-    const k = 165;
+    const k = spacing();
     const free = nodes.filter((n) => !n.pinned);
+    const cell = k * REPULSION_CUTOFF;
+    const buckets = new Map();
+    const key = (x, y) => `${Math.floor(x / cell)}:${Math.floor(y / cell)}`;
+    for (const n of free) {
+      const id = key(n.x, n.y);
+      const bucket = buckets.get(id);
+      if (bucket) bucket.push(n);
+      else buckets.set(id, [n]);
+    }
 
-    for (let i = 0; i < free.length; i++) {
-      const a = free[i];
-      for (let j = i + 1; j < free.length; j++) {
-        const b = free[j];
-        let dx = b.x - a.x, dy = b.y - a.y;
-        let d2 = dx * dx + dy * dy;
-        if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
-        const d = Math.sqrt(d2);
-        const rep = (k * k * 1.5) / d2;
-        const fx = (dx / d) * rep, fy = (dy / d) * rep;
-        a.vx -= fx; a.vy -= fy;
-        b.vx += fx; b.vy += fy;
+    const cutoff2 = cell * cell;
+    for (const a of free) {
+      const cx = Math.floor(a.x / cell), cy = Math.floor(a.y / cell);
+      for (let ox = -1; ox <= 1; ox++) {
+        for (let oy = -1; oy <= 1; oy++) {
+          for (const b of buckets.get(`${cx + ox}:${cy + oy}`) ?? []) {
+            // Each unordered pair is visited twice, once from each end, so the
+            // force is applied to one node at a time rather than to both.
+            if (b === a) continue;
+            let dx = b.x - a.x, dy = b.y - a.y;
+            let d2 = dx * dx + dy * dy;
+            if (d2 > cutoff2) continue;
+            if (d2 < 1) { dx = Math.random() - 0.5; dy = Math.random() - 0.5; d2 = 1; }
+            const d = Math.sqrt(d2);
+            const rep = (k * k * 1.5) / d2;
+            a.vx -= (dx / d) * rep;
+            a.vy -= (dy / d) * rep;
+          }
+        }
       }
     }
     for (const e of edges) {
@@ -134,13 +190,13 @@ function createCanvasRenderer(container, opts) {
       if (!a || !b || a.pinned || b.pinned) continue;
       const dx = b.x - a.x, dy = b.y - a.y;
       const d = Math.hypot(dx, dy) || 1;
-      const f = (d - k) * 0.02;
+      const f = (d - k) * 0.035;
       a.vx += (dx / d) * f; a.vy += (dy / d) * f;
       b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
     }
     for (const n of free) {
-      n.vx -= n.x * 0.006;
-      n.vy -= n.y * 0.006;
+      n.vx -= n.x * 0.012;
+      n.vy -= n.y * 0.012;
       n.vx *= 0.86; n.vy *= 0.86;
       n.x += Math.max(-30, Math.min(30, n.vx)) * alpha;
       n.y += Math.max(-30, Math.min(30, n.vy)) * alpha;
@@ -508,7 +564,7 @@ function createCanvasRenderer(container, opts) {
   const isChunk = (n) => n.label === 'Chunk';
 
   const baseRadius = (n) =>
-    n.id === selected ? 17 : isChunk(n) ? 15 : 12;
+    n.radius ?? (n.id === selected ? 17 : isChunk(n) ? 15 : 12);
   /** Grown by `appear` on the way in, and floored so a wide fan zoomed out to
    *  fit is still made of visible dots rather than dust. */
   const radius = (n) => {
@@ -539,7 +595,7 @@ function createCanvasRenderer(container, opts) {
       const flow = lit && (isChunk(a) || isChunk(b));
       ctx.lineWidth = (flow ? 1.8 : lit ? 1.5 : 1) / view.scale;
       ctx.strokeStyle = flow
-        ? `rgba(255,122,184,${0.16 + 0.34 * g})`
+        ? `rgba(110,231,255,${0.18 + 0.38 * g})`
         : lit
         ? `rgba(255,255,255,${0.10 + 0.20 * g})`
         : `rgba(255,255,255,${0.05 * g})`;
@@ -560,7 +616,7 @@ function createCanvasRenderer(container, opts) {
       }
       if (lit && g > 0.98 && view.scale > 1.05) {
         ctx.save();
-        ctx.font = `${9 / view.scale}px "JetBrains Mono", monospace`;
+        ctx.font = `${9 / view.scale}px "IBM Plex Mono", ui-monospace, monospace`;
         ctx.fillStyle = 'rgba(43,217,196,0.75)';
         ctx.textAlign = 'center';
         // Midpoint of the quadratic, not of the chord.
@@ -583,8 +639,8 @@ function createCanvasRenderer(container, opts) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, r + 11, 0, Math.PI * 2);
         ctx.fillStyle = n.id === selected
-          ? 'rgba(255,77,157,0.22)'
-          : `rgba(255,77,157,${0.13 * appear})`;
+          ? 'rgba(110,231,255,0.24)'
+          : `rgba(110,231,255,${0.14 * appear})`;
         ctx.fill();
       }
 
@@ -598,11 +654,14 @@ function createCanvasRenderer(container, opts) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
       }
-      ctx.fillStyle = lit ? base : '#3a2c52';
+      ctx.fillStyle = lit ? base : GHOST_FILL;
       ctx.fill();
       ctx.lineWidth = 2.5 / view.scale;
+      // The ring carries the evidence level where the corpus grades one. Where
+      // it does not, a single grey ring on every node is noise pretending to be
+      // information, so the node's own colour is deepened instead.
       ctx.strokeStyle = lit
-        ? (isChunk(n) ? CHUNK_RING : STATUS_RING[n.status] ?? '#888')
+        ? (isChunk(n) ? CHUNK_RING : STATUS_RING[n.status] ?? shade(base))
         : 'rgba(255,255,255,0.10)';
       ctx.stroke();
       ctx.globalAlpha = 1;
@@ -620,14 +679,14 @@ function createCanvasRenderer(container, opts) {
         : !revealed && view.scale > 1.2;
       if (showLabel) {
         ctx.globalAlpha = lit ? appear : 0.4;
-        ctx.font = '11.5px Inter, "Segoe UI", sans-serif';
+        ctx.font = '10.5px "IBM Plex Mono", ui-monospace, monospace';
         ctx.textAlign = 'center';
         ctx.textBaseline = 'top';
         const label = n.name.length > 26 ? n.name.slice(0, 25) + '…' : n.name;
         ctx.lineWidth = 3;
-        ctx.strokeStyle = 'rgba(18,11,30,0.9)';
+        ctx.strokeStyle = STAGE_BG;
         ctx.strokeText(label, n.x, n.y + r + 5);
-        ctx.fillStyle = '#f2e9ff';
+        ctx.fillStyle = '#D9E2EC';
         ctx.fillText(label, n.x, n.y + r + 5);
         ctx.globalAlpha = 1;
       }
@@ -847,9 +906,9 @@ async function createNvlRenderer(container, opts) {
       id: n.id,
       captions: [{ value: n.name }],
       caption: n.name,
-      color: dim ? '#3a2c52' : (opts.colors[n.label] ?? '#8a8a8a'),
+      color: dim ? GHOST_FILL : (opts.colors[n.label] ?? '#8a8a8a'),
       size: n.id === selected ? 34 : 24,
-      borderColor: STATUS_RING[n.status] ?? '#888',
+      borderColor: STATUS_RING[n.status] ?? ACCENT,
       borderWidth: 3,
       selected: n.id === selected,
     };

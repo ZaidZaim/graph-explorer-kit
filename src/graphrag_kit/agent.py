@@ -8,7 +8,7 @@ whichever it picks answers half the question.
 
 This module hands the retrievers to an agent as tools and lets the model choose,
 call more than one, and call again after reading the first result. The retrieval
-itself is unchanged — same indexes, same `GRAPH_CONTEXT_QUERY`, same graph.
+itself is unchanged — same indexes, same graph-expansion query, same graph.
 
 Every tool that touches entities records their element IDs on an `EvidenceTrail`,
 so the caller can still light up exactly the subgraph the answer came from — here
@@ -41,6 +41,14 @@ from graphrag_kit.config import (
     get_embedder,
     get_llm,
     use_utf8_stdout,
+)
+from graphrag_kit.cypher import (
+    evidence_expr,
+    fact_expr,
+    label_expr,
+    lucene_escape,
+    name_expr,
+    source_name_expr,
 )
 from graphrag_kit.project import ProjectSpec, load_project
 from graphrag_kit.retrievers import (
@@ -98,45 +106,67 @@ Call more than one tool when a question has more than one part, and call again i
 the first result is thin. Do not answer a multi-part question from a single lookup
 because the first tool returned something plausible.
 
-Entities and facts are tagged with an evidence level, one of: __LEVELS__.
-State the level when it matters, and never present a lower-confidence claim as an
-established fact. Cite the source document for each claim.
+Be economical. Aim to answer in two or three tool calls: one per part of the
+question, plus at most one follow-up where the first result was genuinely
+inadequate. Keep generated Cypher simple — a query that counts what was asked
+beats one that also cross-checks for duplicates. Once you can answer, answer.
+Do not keep verifying a result you already have.
+
+__EVIDENCE__Cite the source document for each claim.
 
 If the tools do not answer the question, say so plainly. Do not fill the gap from
 your own knowledge — anything not in the graph is out of scope."""
 
 
+EVIDENCE_INSTRUCTION = """Entities and facts are tagged with an evidence level, one of: __LEVELS__.
+State the level when it matters, and never present a lower-confidence claim as an
+established fact.
+"""
+
+
 def build_instructions(spec: ProjectSpec) -> str:
+    """The agent's instructions, with the evidence paragraph dropped for a corpus
+    that carries no grading — told to cite a level it will never see, the model
+    invents one."""
+    evidence = (
+        EVIDENCE_INSTRUCTION.replace("__LEVELS__", ", ".join(spec.evidence_levels))
+        if spec.grades_evidence
+        else ""
+    )
     return (
         AGENT_INSTRUCTIONS
         .replace("__PERSONA__", spec.rag_persona.strip())
-        .replace("__LEVELS__", ", ".join(spec.evidence_levels))
+        .replace("__EVIDENCE__", evidence)
     )
 
 
-# Both directions are collected: "who reports to X" and "who does X report to"
-# are the same edge seen from opposite ends, and an agent handed only the
-# outgoing half concludes the other half does not exist.
-ENTITY_LOOKUP_QUERY = """
-CALL db.index.fulltext.queryNodes($index, $name, {limit: $limit})
+def entity_lookup_query(spec: ProjectSpec) -> str:
+    """Find entities by name, with every relationship they take part in.
+
+    Both directions are collected: "who reports to X" and "who does X report to"
+    are the same edge seen from opposite ends, and an agent handed only the
+    outgoing half concludes the other half does not exist.
+    """
+    return f"""
+CALL db.index.fulltext.queryNodes($index, $name, {{limit: $limit}})
 YIELD node AS e, score
 OPTIONAL MATCH (e)-[out]->(t:__Entity__)
 OPTIONAL MATCH (s:__Entity__)-[incoming]->(e)
 RETURN
   elementId(e) AS id,
-  head([l IN labels(e) WHERE NOT l IN ['__Entity__', '__KGBuilder__']]) AS label,
-  e.name AS name,
-  coalesce(e.status, 'unrated') AS status,
+  {label_expr('e')} AS label,
+  {name_expr('e', spec)} AS name,
+  {evidence_expr('e', spec)} AS status,
   e.description AS description,
-  collect(DISTINCT e.name + ' -[' + type(out) + ']-> ' + t.name +
-          ' (' + coalesce(t.status, 'unrated') + ')') AS outgoing_facts,
-  collect(DISTINCT s.name + ' -[' + type(incoming) + ']-> ' + e.name +
-          ' (' + coalesce(s.status, 'unrated') + ')') AS incoming_facts,
+  properties(e) AS props,
+  collect(DISTINCT {fact_expr('e', 'out', 't', spec)}) AS outgoing_facts,
+  collect(DISTINCT {fact_expr('s', 'incoming', 'e', spec)}) AS incoming_facts,
   [x IN collect(DISTINCT elementId(t)) + collect(DISTINCT elementId(s))
    WHERE x IS NOT NULL] AS neighbour_ids,
   score
 ORDER BY score DESC
 """
+
 
 OVERVIEW_QUERY = """
 MATCH (n:__Entity__)
@@ -144,6 +174,10 @@ UNWIND labels(n) AS label
 WITH label, n WHERE NOT label IN ['__Entity__', '__KGBuilder__']
 RETURN label, count(DISTINCT n) AS count ORDER BY count DESC
 """
+
+#: Entity properties the agent is not shown. Bookkeeping and vectors only — the
+#: rest is the substance of the record and is exactly what it should be reading.
+AGENT_HIDDEN_PROPERTIES = {"__id__", "id", "index", "name", "description"}
 
 
 def build_agent(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> Agent:
@@ -203,7 +237,12 @@ def build_agent(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> Agent:
     ) -> str:
         """Find entities by name and return their properties, evidence level, and
         every relationship they take part in. Use when you already have a name."""
-        records = run(ENTITY_LOOKUP_QUERY, index=ENTITY_FULLTEXT_INDEX_NAME, name=name, limit=limit)
+        records = run(
+            entity_lookup_query(spec),
+            index=ENTITY_FULLTEXT_INDEX_NAME,
+            name=lucene_escape(name),
+            limit=limit,
+        )
         if not records:
             return f"No entity matching {name!r}."
         ids = [r["id"] for r in records] + [i for r in records for i in r["neighbour_ids"]]
@@ -211,9 +250,21 @@ def build_agent(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> Agent:
 
         blocks = []
         for record in records:
-            lines = [f"{record['label']}: {record['name']} [{record['status']}]"]
+            grade = f" [{record['status']}]" if record["status"] else ""
+            lines = [f"{record['label']}: {record['name']}{grade}"]
             if record["description"]:
                 lines.append(f"  {record['description']}")
+            # The measurements are the point in this corpus: an Observation's
+            # shape, movement, speed and altitude say more than its description.
+            details = [
+                f"{key}={value}"
+                for key, value in sorted((record["props"] or {}).items())
+                if key not in AGENT_HIDDEN_PROPERTIES
+                and "embedding" not in key.lower()
+                and isinstance(value, (str, int, float, bool))
+            ]
+            if details:
+                lines.append("  " + "; ".join(details))
             facts = [
                 fact
                 for fact in (record["outgoing_facts"] or []) + (record["incoming_facts"] or [])
@@ -234,7 +285,11 @@ def build_agent(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> Agent:
             "MATCH (:__Entity__)-[r]->(:__Entity__) "
             "RETURN type(r) AS type, count(*) AS count ORDER BY count DESC"
         )
-        docs = run("MATCH (d:Document) RETURN collect(coalesce(d.source, d.path)) AS sources")
+        lex = spec.lexical
+        docs = run(
+            f"MATCH (d:`{lex.source_label}`) "
+            f"RETURN collect({source_name_expr('d', spec)})[..40] AS sources"
+        )
         return (
             "Entity types: "
             + ", ".join(f"{r['label']} ({r['count']})" for r in labels)

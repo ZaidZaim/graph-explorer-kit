@@ -1,11 +1,22 @@
 /* Graph explorer front-end.
  *
+ * Three views over one graph:
+ *   graph     the records themselves, filtered by POLE group and label
+ *   schema    the model — node types, their properties, and what may link to
+ *             what — sized by how many instances the graph actually holds
+ *   timeline  the dated events, in order
+ *
+ * Asking a question streams the pipeline's stages (see /api/ask/stream) and the
+ * graph unfolds one ring per stage, so the picture grows in the order the answer
+ * was reasoned out. Adding a document streams the same way: the file is chunked,
+ * embedded and extracted against the same schema, and what it added lights up.
+ *
  * NVL ships ESM-only with no UMD bundle, so it is imported from esm.sh rather
  * than bundled. If that import fails (offline, CDN blocked), renderer.js falls
  * back to a built-in canvas renderer so the demo still works.
  */
 
-import { createRenderer } from '/static/renderer.js?v=3';
+import { createRenderer } from '/static/renderer.js?v=4';
 
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
@@ -14,7 +25,7 @@ const api = async (path, opts) => {
   return res.json();
 };
 
-const CHUNK_COLOR = '#7d6ea8';
+const CHUNK_COLOR = '#41506B';
 
 /** Which ring each backend stage lands on. The order is the pipeline's own: the
  *  passages the question matched, the entities in them, and the neighbourhood
@@ -22,16 +33,33 @@ const CHUNK_COLOR = '#7d6ea8';
  *  the answer card — it is not a thing in the graph. */
 const STAGE_RING = { evidence: 1, entities: 2, neighbourhood: 3 };
 
+/** Segments in the pipeline indicator. Four is the number of stages a
+ *  hybrid-cypher answer actually goes through; the agent decides its own route
+ *  and simply fills them as it goes. */
+const PROGRESS_STEPS = 4;
+
+const CAPTIONS = {
+  graph: 'Every extracted record and the links between them. Click a node for its provenance.',
+  schema: 'The POLE model this corpus is held to. Node size is how many records carry that type.',
+  timeline: 'Events carrying a date, earliest first. Dates are as precise as the document allowed.',
+};
+
 const state = {
   meta: null,
   graph: { nodes: [], relationships: [] },
+  schema: null,
+  view: 'graph',
   activeLabels: new Set(),
   activeStatuses: new Set(),
+  // Entities with no relationship at all. A third of this corpus, and as a
+  // default view they bury the structure, so they are opt-in.
+  showIsolated: false,
   renderer: null,
   selected: null,
   // Nodes that exist only inside the current unfold (passages, mostly), so the
   // details panel can describe them without a round trip.
   unfoldNodes: new Map(),
+  newIds: new Set(),
 };
 
 /* ---------------- boot ---------------- */
@@ -44,13 +72,15 @@ async function boot() {
     state.activeStatuses = new Set(state.meta.evidenceLevels);
 
     applyBranding();
-    buildLabelFilters();
+    buildPoleFilters();
     buildStatusFilters();
     buildStats();
     buildRetrievers();
     buildExamples();
+    startClock();
+    loadSources();
 
-    setLoading('Loading the POLE graph…');
+    setLoading('Loading the graph…');
     state.renderer = await createRenderer($('graph'), {
       onNodeClick: showDetails,
       onBackgroundClick: hideDetails,
@@ -65,6 +95,7 @@ async function boot() {
     // Dev affordance: inspect layout state from the console.
     window.__graphrag = { state, renderer: state.renderer };
     await refreshGraph();
+    setCaption(CAPTIONS.graph);
     setLoading(null);
   } catch (err) {
     console.error(err);
@@ -80,7 +111,30 @@ function applyBranding() {
   $('brand-title').textContent = state.meta.title;
   $('brand-subtitle').textContent = state.meta.subtitle;
   const first = state.meta.examples?.[0];
-  if (first) $('question').placeholder = `Ask the graph — e.g. ${first.toLowerCase()}`;
+  if (first) $('question').placeholder = `Ask the record — e.g. ${first.toLowerCase()}`;
+  $('evidence-panel').hidden = !state.meta.gradesEvidence;
+  $('views').querySelector('[data-view="timeline"]').hidden = !state.meta.hasTimeline;
+  $('isolated-count').textContent = state.meta.isolated ?? 0;
+  const suffixes = state.meta.uploadSuffixes ?? [];
+  if (suffixes.length) $('upload-hint').textContent = `Drop a file (${suffixes.join(' ')})`;
+  updateHud();
+}
+
+function updateHud() {
+  const entities = Object.values(state.meta.counts).reduce((a, b) => a + b, 0);
+  $('hud-records').textContent = entities.toLocaleString();
+  $('hud-links').textContent = state.meta.relationships.toLocaleString();
+  $('hud-docs').textContent = state.meta.documents;
+}
+
+/** The source site keeps a clock in its masthead; this is the same idea and the
+ *  same purpose — it says the page is live rather than a screenshot. */
+function startClock() {
+  const tick = () => {
+    $('hud-clock').textContent = new Date().toISOString().slice(11, 19);
+  };
+  tick();
+  setInterval(tick, 1000);
 }
 
 /** Tell the renderer which parts of the stage are covered by floating panels,
@@ -118,27 +172,80 @@ function setLoading(text) {
   $('loading-text').textContent = text;
 }
 
-/* ---------------- sidebar ---------------- */
+function setCaption(text) {
+  const el = $('stage-caption');
+  el.textContent = text ?? '';
+  el.hidden = !text;
+}
 
-function buildLabelFilters() {
-  const ul = $('label-filters');
-  ul.innerHTML = '';
-  for (const label of state.meta.labels) {
-    const color = state.meta.colors[label];
-    const li = document.createElement('li');
-    li.style.color = color;
-    li.innerHTML =
-      `<span class="swatch" style="background:${color}"></span>` +
-      `<span style="color:var(--text)">${label}</span>` +
-      `<span class="count">${state.meta.counts[label] ?? 0}</span>`;
-    li.onclick = () => {
-      state.activeLabels.has(label)
-        ? state.activeLabels.delete(label)
-        : state.activeLabels.add(label);
-      li.classList.toggle('off', !state.activeLabels.has(label));
+function setNote(text) {
+  const el = $('stage-note');
+  el.textContent = text ?? '';
+  el.hidden = !text;
+}
+
+/* ---------------- POLE filters ---------------- */
+
+function buildPoleFilters() {
+  const box = $('pole-groups');
+  box.innerHTML = '';
+  const { groups, groupColors, colors, counts } = state.meta;
+
+  for (const [group, labels] of Object.entries(groups)) {
+    const total = labels.reduce((sum, l) => sum + (counts[l] ?? 0), 0);
+    const div = document.createElement('div');
+    div.className = 'pole-group';
+    div.style.setProperty('--swatch', groupColors[group] ?? 'var(--muted)');
+
+    const head = document.createElement('div');
+    head.className = 'pole-head';
+    head.innerHTML = `<span>${group}</span><span class="count">${total}</span>`;
+    // Clicking a group toggles all of its labels at once: the group *is* the
+    // POLE class, and "show me only the people" is the question being asked.
+    head.onclick = () => {
+      const anyOn = labels.some((l) => state.activeLabels.has(l));
+      for (const l of labels) {
+        if (anyOn) state.activeLabels.delete(l);
+        else state.activeLabels.add(l);
+      }
+      syncFilterUi();
       refreshGraph();
     };
-    ul.appendChild(li);
+    div.appendChild(head);
+
+    const ul = document.createElement('ul');
+    ul.className = 'pole-labels';
+    for (const label of labels) {
+      const li = document.createElement('li');
+      li.dataset.label = label;
+      li.style.setProperty('--swatch', colors[label] ?? groupColors[group]);
+      li.innerHTML =
+        `<span class="dot"></span><span class="l-name">${label}</span>` +
+        `<span class="count">${counts[label] ?? 0}</span>`;
+      li.onclick = (e) => {
+        e.stopPropagation();
+        state.activeLabels.has(label)
+          ? state.activeLabels.delete(label)
+          : state.activeLabels.add(label);
+        syncFilterUi();
+        refreshGraph();
+      };
+      ul.appendChild(li);
+    }
+    div.appendChild(ul);
+    box.appendChild(div);
+  }
+  syncFilterUi();
+}
+
+function syncFilterUi() {
+  for (const li of document.querySelectorAll('.pole-labels li')) {
+    li.classList.toggle('is-off', !state.activeLabels.has(li.dataset.label));
+  }
+  for (const [group, labels] of Object.entries(state.meta.groups)) {
+    const div = [...document.querySelectorAll('.pole-group')].find(
+      (d) => d.querySelector('.pole-head span').textContent === group);
+    div?.classList.toggle('is-off', !labels.some((l) => state.activeLabels.has(l)));
   }
 }
 
@@ -154,14 +261,14 @@ function buildStatusFilters() {
     const li = document.createElement('li');
     li.style.color = statusColor(i);
     li.innerHTML =
-      `<span class="swatch" style="background:${statusColor(i)}"></span>` +
+      `<span class="dot" style="background:${statusColor(i)}"></span>` +
       `<span style="color:var(--text)">${status}</span>` +
       `<span class="count">${state.meta.statuses[status] ?? 0}</span>`;
     li.onclick = () => {
       state.activeStatuses.has(status)
         ? state.activeStatuses.delete(status)
         : state.activeStatuses.add(status);
-      li.classList.toggle('off', !state.activeStatuses.has(status));
+      li.classList.toggle('is-off', !state.activeStatuses.has(status));
       refreshGraph();
     };
     ul.appendChild(li);
@@ -169,19 +276,29 @@ function buildStatusFilters() {
 }
 
 function buildStats() {
-  const dl = $('stats');
-  const rows = [
+  const entities = Object.values(state.meta.counts).reduce((a, b) => a + b, 0);
+  $('stats').innerHTML = [
+    ['Records', entities.toLocaleString()],
+    ['Links', state.meta.relationships.toLocaleString()],
     ['Documents', state.meta.documents],
-    ['Chunks', state.meta.chunks],
-    ['Entities', Object.values(state.meta.counts).reduce((a, b) => a + b, 0)],
-    ['Relationships', state.meta.relationships],
-  ];
-  dl.innerHTML = rows.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+    ['Passages', state.meta.chunks],
+  ].map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join('');
+}
+
+async function loadSources() {
+  try {
+    const { sources } = await api('/api/documents');
+    $('sources').innerHTML = sources.map((s) =>
+      `<li${state.newIds.has(s.id) ? ' class="is-new"' : ''}>${escapeHtml(s.name)}` +
+      `<br><span class="meta">${s.chunks} passages · ${s.entities} records</span></li>`
+    ).join('');
+  } catch (err) {
+    console.error(err);
+  }
 }
 
 function buildRetrievers() {
-  const sel = $('retriever');
-  sel.innerHTML = state.meta.retrievers
+  $('retriever').innerHTML = state.meta.retrievers
     .map((r) => `<option value="${r}"${r === 'hybrid-cypher' ? ' selected' : ''}>${r}</option>`)
     .join('');
 }
@@ -198,25 +315,97 @@ function buildExamples() {
   }
 }
 
-/* ---------------- graph ---------------- */
+/* ---------------- views ---------------- */
+
+async function setView(view) {
+  state.view = view;
+  for (const tab of document.querySelectorAll('.view-tab')) {
+    tab.classList.toggle('is-active', tab.dataset.view === view);
+  }
+  $('pole-panel').hidden = view !== 'graph';
+  hideDetails();
+  closeAnswer();
+  setCaption(CAPTIONS[view]);
+  if (view !== 'graph') setNote(null);
+
+  if (view === 'graph') return refreshGraph();
+  if (view === 'schema') return showSchema();
+  if (view === 'timeline') return showTimeline();
+}
 
 async function refreshGraph() {
+  if (state.view !== 'graph') return;
   const labels = [...state.activeLabels].join(',');
   const status = [...state.activeStatuses].join(',');
-  if (!labels || !status) {
+  if (!labels || (state.meta.gradesEvidence && !status)) {
     state.graph = { nodes: [], relationships: [] };
     state.renderer.setGraph(state.graph);
     $('graph-empty').hidden = false;
     return;
   }
-  state.graph = await api(`/api/graph?labels=${encodeURIComponent(labels)}&status=${encodeURIComponent(status)}`);
+  state.graph = await api(
+    `/api/graph?labels=${encodeURIComponent(labels)}&status=${encodeURIComponent(status)}` +
+    `&connected=${state.showIsolated ? 'false' : 'true'}`);
   $('graph-empty').hidden = state.graph.nodes.length > 0;
   state.renderer.setGraph(state.graph);
+  setNote(state.showIsolated || !state.meta.isolated
+    ? null
+    : `${state.meta.isolated} unlinked records hidden`);
+}
+
+/** The schema as a graph: one node per type, sized by how many records carry it,
+ *  and one edge per pattern the schema licenses. */
+async function showSchema() {
+  if (!state.schema) state.schema = await api('/api/schema');
+  const max = Math.max(1, ...state.schema.nodes.map((n) => n.count));
+  const nodes = state.schema.nodes.map((n) => ({
+    ...n,
+    // Area, not radius, tracks the count — a linear radius makes Observation
+    // (261) look thirty times more important than Redaction (1) rather than
+    // sixteen, and swamps the small types entirely.
+    radius: 11 + 26 * Math.sqrt(n.count / max),
+    name: `${n.label} (${n.count})`,
+  }));
+  state.graph = { nodes, relationships: state.schema.relationships };
+  $('graph-empty').hidden = true;
+  state.renderer.setGraph(state.graph);
+}
+
+async function showTimeline() {
+  const res = await api('/api/timeline');
+  state.renderer.unfold({ nodes: res.nodes, relationships: [] });
+  for (const n of res.nodes) state.unfoldNodes.set(n.id, n);
+  $('answer').hidden = false;
+  $('answer-title').textContent = `Timeline · ${res.nodes.length} dated events`;
+  $('progress').hidden = true;
+  $('answer-body').className = 'log';
+  $('answer-body').innerHTML = res.nodes.map((n) =>
+    `<div class="log-row" data-id="${escapeHtml(n.id)}">` +
+    `<span class="log-date">${escapeHtml(shortDate(n.date))}</span>` +
+    `<span class="log-name">${escapeHtml(n.name)}</span></div>`
+  ).join('') || '<p>No dated events in the graph.</p>';
+  $('answer-context').innerHTML = '';
+  $('context-details').hidden = true;
+  for (const row of $('answer-body').querySelectorAll('.log-row')) {
+    row.onclick = () => { state.renderer.focus(row.dataset.id); showDetails(row.dataset.id); };
+  }
+  syncInsets();
+}
+
+/** Dates in this corpus range from a bare year to a full ISO timestamp. Show
+ *  the day where there is one and no more — a fabricated 00:00:00 reads as
+ *  precision the document never had. */
+function shortDate(value) {
+  const text = String(value ?? '');
+  const iso = text.match(/^(\d{4})(-\d{2})?(-\d{2})?/);
+  return iso ? iso[0] : text.slice(0, 12);
 }
 
 /* ---------------- details ---------------- */
 
 async function showDetails(nodeId) {
+  if (state.view === 'schema') return showSchemaDetails(nodeId);
+
   const node = state.graph.nodes.find((n) => n.id === nodeId)
     ?? state.unfoldNodes.get(nodeId)
     ?? (await api(`/api/expand?id=${encodeURIComponent(nodeId)}`)).nodes.find((n) => n.id === nodeId);
@@ -225,66 +414,119 @@ async function showDetails(nodeId) {
   if (node.label === 'Chunk') { showChunkDetails(node); return; }
 
   state.selected = nodeId;
-  const color = state.meta.colors[node.label] ?? '#888';
-  $('detail-label').textContent = node.label ?? 'Entity';
-  $('detail-label').style.background = color;
+  openDetails(node.label, state.meta.colors[node.label] ?? '#8894a8');
+  $('detail-group').textContent = node.group ? `POLE · ${node.group}` : '';
   $('detail-name').textContent = node.name;
 
   const ev = $('detail-status');
-  ev.textContent = node.evidence_levels?.length > 1
-    ? `${node.status} — also seen as ${node.evidence_levels.filter((s) => s !== node.status).join(', ')}`
-    : node.status;
-  ev.className = `evidence ${node.status}`;
+  ev.hidden = !node.status;
+  if (node.status) {
+    ev.textContent = node.evidence_levels?.length > 1
+      ? `${node.status} — also seen as ${node.evidence_levels.filter((s) => s !== node.status).join(', ')}`
+      : node.status;
+    ev.className = `evidence ${node.status}`;
+  }
 
   $('detail-description').textContent = node.description ?? '';
-
-  const props = [
-    ['Role', node.role], ['Kind', node.kind], ['Date', node.date],
-    ['Inspiration', node.inspiration],
-    ['Fictional', node.fictional === null || node.fictional === undefined ? null : String(node.fictional)],
-  ].filter(([, v]) => v);
-  $('detail-props').innerHTML = props.map(([k, v]) => `<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`).join('');
+  $('detail-props').innerHTML = propertyRows(node);
 
   const sub = await api(`/api/expand?id=${encodeURIComponent(nodeId)}`);
   const byId = new Map(sub.nodes.map((n) => [n.id, n]));
   const ul = $('detail-rels');
   ul.innerHTML = '';
   for (const rel of sub.relationships) {
+    if (rel.from !== nodeId && rel.to !== nodeId) continue;
     const outgoing = rel.from === nodeId;
     const other = byId.get(outgoing ? rel.to : rel.from);
     if (!other) continue;
     const li = document.createElement('li');
     li.innerHTML =
       `<span class="rel-type">${outgoing ? '→' : '←'} ${rel.type}</span>` +
-      `<span class="dir">${escapeHtml(other.label ?? '')}:</span> ${escapeHtml(other.name)}`;
+      `<span class="dir">${escapeHtml(other.label ?? '')}</span> ${escapeHtml(other.name)}`;
     li.onclick = () => { state.renderer.focus(other.id); showDetails(other.id); };
     ul.appendChild(li);
   }
-  if (!ul.children.length) ul.innerHTML = '<li style="cursor:default">No connections in the graph.</li>';
-
-  $('details').hidden = false;
-  $('app').classList.add('with-details');
+  if (!ul.children.length) {
+    ul.innerHTML = '<li class="inert">No connections in the graph.</li>';
+  }
   state.renderer.select(nodeId);
+}
+
+/** Properties, minus the ones already shown above as name or description.
+ *  Everything else the extractor recorded is shown as-is: in this corpus the
+ *  measurements *are* the record. */
+function propertyRows(node) {
+  const shown = new Set(['description', 'evidence_levels']);
+  const nameProps = ['name', 'title', 'text', 'filename', 'number', 'reason'];
+  // Only the property that actually produced the display name is redundant.
+  for (const key of nameProps) {
+    if (node.properties?.[key] && String(node.properties[key]).startsWith(node.name.slice(0, 40))) {
+      shown.add(key);
+      break;
+    }
+  }
+  const rows = Object.entries(node.properties ?? {})
+    .filter(([k, v]) => !shown.has(k) && v !== null && v !== '')
+    .map(([k, v]) => {
+      const value = Array.isArray(v) ? v.join(', ') : String(v);
+      const redacted = /\[REDACTED\]|\[ILLEGIBLE\]/i.test(value);
+      return `<dt>${escapeHtml(k.replace(/_/g, ' '))}</dt>` +
+             `<dd${redacted ? ' class="redacted"' : ''}>${escapeHtml(value)}</dd>`;
+    });
+  return rows.join('') || '<dt>—</dt><dd>No further properties recorded.</dd>';
+}
+
+/** A schema node is a *type*, so its detail is the contract: what it means,
+ *  which properties it carries, and how many records exist. */
+function showSchemaDetails(label) {
+  const node = state.schema.nodes.find((n) => n.id === label);
+  if (!node) return;
+  state.selected = label;
+  openDetails(node.label, state.meta.colors[node.label] ?? '#8894a8');
+  $('detail-group').textContent = node.group ? `POLE · ${node.group}` : '';
+  $('detail-name').textContent = node.label;
+  $('detail-status').hidden = true;
+  $('detail-description').textContent = node.description ?? '';
+  $('detail-props').innerHTML =
+    `<dt>Records</dt><dd>${node.count}</dd>` +
+    // `||` not `??`: the schema library defaults an absent description to an
+    // empty string, which nullish-coalescing happily renders as a blank row.
+    node.properties.map((p) =>
+      `<dt>${escapeHtml(p.name)}</dt>` +
+      `<dd>${escapeHtml(p.description || p.type.toLowerCase())}</dd>`).join('');
+
+  const edges = state.schema.relationships.filter((r) => r.from === label || r.to === label);
+  $('detail-rels').innerHTML = edges.map((r) => {
+    const outgoing = r.from === label;
+    return `<li class="inert"><span class="rel-type">${outgoing ? '→' : '←'} ${r.type}</span>` +
+           `<span class="dir">${escapeHtml(outgoing ? r.to : r.from)}</span> ` +
+           `${escapeHtml(r.description ?? '')}</li>`;
+  }).join('') || '<li class="inert">No patterns declared for this type.</li>';
+  state.renderer.select(label);
 }
 
 /** A retrieved passage is raw source text, not a graph record — it has no
  *  evidence level and no relationships of its own worth listing. */
 function showChunkDetails(node) {
   state.selected = node.id;
-  $('detail-label').textContent = 'Passage';
-  $('detail-label').style.background = CHUNK_COLOR;
+  openDetails('Passage', CHUNK_COLOR);
+  $('detail-group').textContent = 'Source text';
   $('detail-name').textContent = node.source ?? 'Retrieved passage';
-  $('detail-status').textContent = 'retrieved for this question';
-  $('detail-status').className = 'evidence';
+  $('detail-status').hidden = true;
   $('detail-description').textContent = node.text ?? node.description ?? '';
   $('detail-props').innerHTML = node.score
     ? `<dt>Score</dt><dd>${node.score.toFixed(3)}</dd>`
     : '';
   $('detail-rels').innerHTML =
-    '<li style="cursor:default">The entities extracted from this passage are the next ring out.</li>';
+    '<li class="inert">The records extracted from this passage are the next ring out.</li>';
+  state.renderer.select(node.id);
+}
+
+function openDetails(label, color) {
+  $('detail-label').textContent = label ?? 'Record';
+  $('detail-label').style.background = color;
   $('details').hidden = false;
   $('app').classList.add('with-details');
-  state.renderer.select(node.id);
 }
 
 function hideDetails() {
@@ -298,12 +540,8 @@ function hideDetails() {
 
 /** Read a text/event-stream response, calling back once per complete event.
  *  EventSource cannot POST, so the stream is read off fetch by hand. */
-async function streamEvents(path, body, onEvent) {
-  const res = await fetch(path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
+async function streamEvents(path, init, onEvent) {
+  const res = await fetch(path, init);
   if (!res.ok) throw new Error(`${path} -> ${res.status} ${await res.text()}`);
 
   const reader = res.body.getReader();
@@ -326,6 +564,12 @@ async function streamEvents(path, body, onEvent) {
     }
   }
 }
+
+const postJson = (body) => ({
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(body),
+});
 
 /** Stages arrive as fast as the database answers, which is faster than the eye
  *  can follow. This holds each one on screen long enough to be read. */
@@ -350,39 +594,84 @@ function setStage(text) {
   el.hidden = !text;
 }
 
+function resetProgress(steps = PROGRESS_STEPS) {
+  const ol = $('progress-steps');
+  ol.innerHTML = Array.from({ length: steps }, () => '<li></li>').join('');
+  $('progress').hidden = false;
+}
+
+/** Advance the indicator: everything before `index` is done, `index` is live. */
+function markProgress(index) {
+  const items = [...$('progress-steps').children];
+  items.forEach((li, i) => {
+    li.classList.toggle('is-done', i < index);
+    li.classList.toggle('is-live', i === index);
+  });
+}
+
+function finishProgress() {
+  for (const li of $('progress-steps').children) {
+    li.classList.add('is-done');
+    li.classList.remove('is-live');
+  }
+  setStage(null);
+}
+
+function closeAnswer() {
+  $('answer').hidden = true;
+  $('context-details').hidden = false;
+  $('answer-body').className = '';
+  setStage(null);
+  state.unfoldNodes = new Map();
+  syncInsets();
+}
+
 async function askQuestion() {
   const question = $('question').value.trim();
   if (!question) return;
+  if (state.view !== 'graph') await setView('graph');
 
   const btn = $('ask-button');
   btn.disabled = true;
-  btn.textContent = 'Thinking…';
+  btn.textContent = 'Working';
   $('answer').hidden = false;
+  $('answer-title').textContent = 'Answer';
+  $('answer-body').className = '';
+  $('context-details').hidden = false;
   syncInsets();
   $('answer-body').innerHTML = '';
   $('answer-context').innerHTML = '';
+  resetProgress();
+  let step = 0;
+  markProgress(step);
   setStage('Sending the question…');
 
-  // Ghost the standing graph and wait for stage one. Each stage adds a ring, so
-  // the picture grows in the order the answer was reasoned out instead of
-  // arriving all at once at the end.
+  // The standing graph is ghosted when the first ring is ready, not now. The
+  // fixed retrievers deliver that within a second, so the effect is unchanged;
+  // the agent chooses its own route and can take a minute, and ghosting up
+  // front would leave an empty stage for all of it.
   state.unfoldNodes = new Map();
-  state.renderer.beginUnfold();
 
   const beat = beatQueue(640);
   let answered = false;
   let gotRings = false;
+  let ghosted = false;
+  const ghostOnce = () => {
+    if (!ghosted) { state.renderer.beginUnfold(); ghosted = true; }
+  };
 
   try {
     await streamEvents('/api/ask/stream',
-      { question, retriever: $('retriever').value, top_k: 5 },
+      postJson({ question, retriever: $('retriever').value, top_k: 5 }),
       (name, data) => {
         if (name === 'stage') {
-          beat.push(() => setStage(data.label));
+          beat.push(() => { setStage(data.label); markProgress(Math.min(step++, PROGRESS_STEPS - 1)); });
         } else if (name === 'unfold') {
           gotRings = true;
           beat.push(() => {
+            ghostOnce();
             setStage(data.label);
+            markProgress(Math.min(step++, PROGRESS_STEPS - 1));
             for (const n of data.nodes) state.unfoldNodes.set(n.id, n);
             state.renderer.addStage({
               nodes: data.nodes,
@@ -392,11 +681,14 @@ async function askQuestion() {
           });
         } else if (name === 'answer') {
           answered = true;
-          setStage(null);
-          $('answer-body').innerHTML = markEvidence(renderMarkdown(data.answer));
-          $('answer-context').innerHTML = data.context.length
-            ? data.context.map((c) => `<pre>${escapeHtml(c)}</pre>`).join('')
-            : '<pre>(no context returned)</pre>';
+          beat.push(() => {
+            finishProgress();
+            $('answer-body').innerHTML = markEvidence(renderMarkdown(data.answer));
+            $('answer-context').innerHTML = data.context.length
+              ? data.context.map((c) => `<pre>${escapeHtml(c)}</pre>`).join('')
+              : '<pre>(no context returned)</pre>';
+            syncInsets();
+          });
         } else if (name === 'warning') {
           console.warn(data.message);
         } else if (name === 'error') {
@@ -406,10 +698,11 @@ async function askQuestion() {
     if (!answered) throw new Error('the stream ended before the answer arrived');
   } catch (err) {
     console.error(err);
-    setStage(null);
+    finishProgress();
+    $('progress').hidden = true;
     // A request that produced no rings at all leaves the graph ghosted with
     // nothing to look at. Put it back rather than stranding the viewer.
-    if (!gotRings) {
+    if (!gotRings && ghosted) {
       state.unfoldNodes = new Map();
       state.renderer.collapse();
     }
@@ -424,9 +717,108 @@ async function askQuestion() {
   }
 }
 
-/** Minimal markdown -> HTML. Models emit **bold**, `code` and bullet lists
- *  whether or not you ask for prose; rendering literal asterisks looks broken.
- *  Escapes first, so this never introduces markup from model output. */
+/* ---------------- extending the graph ---------------- */
+
+function logUpload(text, cls = '') {
+  const ul = $('upload-log');
+  ul.hidden = false;
+  for (const li of ul.querySelectorAll('.is-live')) li.classList.remove('is-live');
+  const li = document.createElement('li');
+  li.className = cls;
+  li.textContent = text;
+  ul.appendChild(li);
+  ul.scrollTop = ul.scrollHeight;
+  return li;
+}
+
+async function uploadDocument(file) {
+  if (!file) return;
+  const zone = $('drop-zone');
+  zone.classList.add('is-busy');
+  $('upload-log').innerHTML = '';
+  logUpload(`${file.name} · ${Math.max(1, Math.round(file.size / 1024))} KB`);
+
+  if (state.view !== 'graph') await setView('graph');
+
+  const body = new FormData();
+  body.append('file', file);
+  let added = 0;
+  try {
+    await streamEvents('/api/documents', { method: 'POST', body }, (name, data) => {
+      if (name === 'stage') {
+        logUpload(data.label, 'is-live');
+      } else if (name === 'unfold') {
+        logUpload(data.label);
+        state.renderer.beginUnfold();
+        for (const n of data.nodes) state.unfoldNodes.set(n.id, n);
+        state.renderer.addStage({
+          nodes: data.nodes,
+          relationships: data.relationships ?? [],
+          stage: 1,
+        });
+      } else if (name === 'done') {
+        added = data.added;
+        state.newIds = new Set(data.newIds);
+        state.meta.counts = data.counts;
+      } else if (name === 'error') {
+        throw new Error(data.message);
+      }
+    });
+    logUpload(`${added} records added — filters and counts updated`);
+    // The graph behind the unfold is now stale, and so is every count in the
+    // rail. Refresh both, but leave the new records lit: what the document
+    // added is the whole point of having uploaded it.
+    state.meta = { ...state.meta, ...(await api('/api/meta')) };
+    buildPoleFilters();
+    buildStats();
+    updateHud();
+    loadSources();
+  } catch (err) {
+    console.error(err);
+    logUpload(err.message, 'is-error');
+  } finally {
+    zone.classList.remove('is-busy');
+    $('upload-input').value = '';
+  }
+}
+
+/* ---------------- search ---------------- */
+
+let searchTimer = null;
+async function onSearch() {
+  clearTimeout(searchTimer);
+  const q = $('search').value.trim();
+  const list = $('search-results');
+  if (!q) { list.hidden = true; return; }
+  searchTimer = setTimeout(async () => {
+    try {
+      const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
+      list.innerHTML = '';
+      for (const n of res.nodes) {
+        const li = document.createElement('li');
+        li.innerHTML =
+          `<span class="dot" style="width:7px;height:7px;border-radius:50%;flex:none;` +
+          `background:${state.meta.colors[n.label] ?? '#8894a8'}"></span>` +
+          `<span>${escapeHtml(n.name)}<br><span class="r-label">${escapeHtml(n.label ?? '')}</span></span>`;
+        li.onclick = async () => {
+          list.hidden = true;
+          $('search').value = '';
+          if (state.view !== 'graph') await setView('graph');
+          state.renderer.focus(n.id);
+          showDetails(n.id);
+        };
+        list.appendChild(li);
+      }
+      list.hidden = res.nodes.length === 0;
+    } catch (err) { console.error(err); }
+  }, 180);
+}
+
+/* ---------------- text rendering ---------------- */
+
+/** Minimal markdown -> HTML. Models emit **bold**, `code`, links and bullet
+ *  lists whether or not you ask for prose; rendering literal asterisks looks
+ *  broken. Escapes first, so this never introduces markup from model output. */
 function renderMarkdown(text) {
   const lines = escapeHtml(text).split('\n');
   const out = [];
@@ -449,87 +841,79 @@ function renderMarkdown(text) {
 
 function inline(s) {
   return s
+    // Links first: the label can itself contain emphasis, and rewriting the
+    // emphasis first would leave tags inside the bracket match.
+    .replace(/\[([^\]]+)\]\((https?:[^)\s]+)\)/g, (_, label, href) =>
+      `<a href="${href}" target="_blank" rel="noreferrer noopener">${label}</a>`)
     .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
     .replace(/(^|[^*])\*([^*]+)\*/g, '$1<em>$2</em>')
     .replace(/`([^`]+)`/g, '<code>$1</code>');
 }
 
-/** Colour the evidence words the model is instructed to emit. */
+/** Colour the evidence words the model is instructed to emit, where the corpus
+ *  grades evidence at all. */
 function markEvidence(html) {
+  if (!state.meta.gradesEvidence) return html;
   return html.replace(/\[?\b(confirmed|reported|rumou?red)\b\]?/gi, (m) => {
     const key = /rumou?red/i.test(m) ? 'rumored' : m.replace(/[[\]]/g, '').toLowerCase();
     return `<span class="ev ev-${key}">${m}</span>`;
   });
 }
 
-/* ---------------- search ---------------- */
-
-let searchTimer = null;
-async function onSearch() {
-  clearTimeout(searchTimer);
-  const q = $('search').value.trim();
-  const list = $('search-results');
-  if (!q) { list.hidden = true; return; }
-  searchTimer = setTimeout(async () => {
-    try {
-      const res = await api(`/api/search?q=${encodeURIComponent(q)}`);
-      list.innerHTML = '';
-      for (const n of res.nodes) {
-        const li = document.createElement('li');
-        li.innerHTML =
-          `<span class="swatch" style="width:9px;height:9px;border-radius:3px;background:${state.meta.colors[n.label] ?? '#888'}"></span>` +
-          `${escapeHtml(n.name)}`;
-        li.onclick = () => {
-          list.hidden = true;
-          $('search').value = '';
-          state.renderer.focus(n.id);
-          showDetails(n.id);
-        };
-        list.appendChild(li);
-      }
-      list.hidden = res.nodes.length === 0;
-    } catch (err) { console.error(err); }
-  }, 180);
-}
-
-/* ---------------- misc ---------------- */
-
 function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (c) =>
     ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 }
 
-async function showTimeline() {
-  const res = await api('/api/timeline');
-  state.renderer.unfold({ nodes: res.nodes, relationships: [] });
-  $('answer').hidden = false;
-  syncInsets();
-  setStage(null);
-  $('answer-body').innerHTML = res.nodes
-    .map((n) => `<strong>${escapeHtml(n.date)}</strong>  ${escapeHtml(n.name)}`)
-    .join('\n');
-  $('answer-context').innerHTML = '';
-}
+/* ---------------- wiring ---------------- */
 
 function wireEvents() {
   $('ask-form').addEventListener('submit', (e) => { e.preventDefault(); askQuestion(); });
   $('search').addEventListener('input', onSearch);
   $('close-details').addEventListener('click', hideDetails);
   $('close-answer').addEventListener('click', () => {
-    $('answer').hidden = true;
-    syncInsets();
-    setStage(null);
-    state.unfoldNodes = new Map();
+    closeAnswer();
     state.renderer?.collapse();
   });
   $('reset-view').addEventListener('click', async () => {
-    $('answer').hidden = true;
-    syncInsets();
-    setStage(null);
-    state.unfoldNodes = new Map();
-    await refreshGraph();
+    closeAnswer();
+    state.newIds = new Set();
+    await setView('graph');
   });
-  $('show-timeline').addEventListener('click', showTimeline);
+  for (const tab of document.querySelectorAll('.view-tab')) {
+    tab.addEventListener('click', () => setView(tab.dataset.view));
+  }
+
+  $('isolated-toggle').addEventListener('click', (e) => {
+    state.showIsolated = !state.showIsolated;
+    e.currentTarget.classList.toggle('is-off', !state.showIsolated);
+    refreshGraph();
+  });
+
+  const zone = $('drop-zone');
+  $('upload-input').addEventListener('change', (e) => uploadDocument(e.target.files[0]));
+  zone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('upload-input').click(); }
+  });
+  // The whole window is a drop target for dragover so the browser never takes
+  // over and navigates to the dropped file, which silently ends the session.
+  for (const type of ['dragenter', 'dragover']) {
+    window.addEventListener(type, (e) => {
+      e.preventDefault();
+      if (e.target.closest?.('#drop-zone')) zone.classList.add('is-dragover');
+    });
+  }
+  window.addEventListener('dragleave', (e) => {
+    if (!e.relatedTarget || !e.relatedTarget.closest?.('#drop-zone')) {
+      zone.classList.remove('is-dragover');
+    }
+  });
+  window.addEventListener('drop', (e) => {
+    e.preventDefault();
+    zone.classList.remove('is-dragover');
+    if (e.target.closest?.('#drop-zone')) uploadDocument(e.dataTransfer?.files?.[0]);
+  });
+
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { hideDetails(); $('search-results').hidden = true; }
   });
