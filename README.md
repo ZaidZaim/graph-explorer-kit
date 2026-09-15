@@ -224,7 +224,10 @@ Three views over the one graph, switched in the masthead:
 - **Ask a question** — the graph unfolds in step with the pipeline rather than
   redrawing once at the end: the matched passages first, then the entities
   extracted from them, then one hop of neighbours, while the model is still
-  writing. The standing graph is ghosted as the first ring lands (not when you
+  writing. In the wide area above the dock those are three rows, top to bottom,
+  with children under their parents; in a tall area they are three rings of a
+  fan. A fan turned to open downward does not survive the turn — its outer rings
+  curl up to the height of the inner one and the depths collapse into one band. The standing graph is ghosted as the first ring lands (not when you
   ask — the agent can take a minute to choose its tools, and an empty stage for
   all of it is not a loading state), a stage line names what is running, a
   segmented indicator says how much is still to come, and the camera re-fits to

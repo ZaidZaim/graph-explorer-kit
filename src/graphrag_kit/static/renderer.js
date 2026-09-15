@@ -431,12 +431,29 @@ function createCanvasRenderer(container, opts) {
       previous = r + (rows > 1 ? stagger : 0);
     }
 
-    // Open the fan across the longer axis of the canvas. A fan is roughly twice
-    // as long across its mouth as it is deep, so opening it rightward into a
-    // wide, short area wastes most of the width and is height-bound; rotated to
-    // open downward, the mouth spans the width and the depth fits the height.
+    // In a wide, short area the fan is laid out as rows rather than rings: the
+    // passages along the top, the entities under them, the neighbourhood along
+    // the bottom. A fan with a 155-degree spread does not survive being turned
+    // to open downward — its outer rings curl up to the height of the inner one
+    // and the three depths collapse into a single jumbled band. Rows keep the
+    // order the pipeline ran in readable top to bottom, and use the width.
+    //
+    // The sector-to-x mapping is shared by every row, so children sit under
+    // their parents; it is scaled so the widest row still gets `arc` per node.
     const { w: cw, h: ch } = size();
-    const rot = cw > ch * 1.3 ? Math.PI / 2 : 0;
+    const layered = cw > ch * 1.3;
+    const arcPer = captioned() ? CAPTION_RADIUS_UNFOLD * 2.6 : NODE_ARC;
+    let widest = 0;
+    for (const d of depths) {
+      const count = byDepth.get(d).length;
+      widest = Math.max(widest, (count * arcPer) / (ringRows.get(d) ?? 1));
+    }
+    const xScale = widest / FAN_SPREAD;
+    const layerGap = captioned() ? CAPTION_RADIUS_UNFOLD * 5.2 : RING_GAP;
+    // Crowded rows alternate nodes up and down; the offset is chosen so two
+    // neighbours a half-arc apart horizontally still clear each other.
+    const layerStagger = captioned() ? CAPTION_RADIUS_UNFOLD * 1.15 : ROW_STAGGER * 0.6;
+    const depthIndex = new Map(depths.map((d, i) => [d, i]));
 
     const pos = new Map();
     const placedInRing = new Map(depths.map((d) => [d, 0]));
@@ -451,7 +468,13 @@ function createCanvasRenderer(container, opts) {
       const stagger = ringStagger.get(d) ?? ROW_STAGGER;
       const offset = ringRows.get(d) > 1 ? (i % 2 ? stagger : -stagger) : 0;
       const r = base > 0 ? base + offset : 0;
-      pos.set(id, { x: Math.cos(mid + rot) * r, y: Math.sin(mid + rot) * r });
+      if (layered) {
+        const row = depthIndex.get(d) ?? 0;
+        const stag = ringRows.get(d) > 1 ? (i % 2 ? layerStagger : -layerStagger) : 0;
+        pos.set(id, { x: mid * xScale, y: row * layerGap + stag });
+      } else {
+        pos.set(id, { x: Math.cos(mid) * r, y: Math.sin(mid) * r });
+      }
 
       const kids = children.get(id) ?? [];
       const total = kids.reduce((s, c) => s + (weight.get(c) ?? 1), 0) || 1;
