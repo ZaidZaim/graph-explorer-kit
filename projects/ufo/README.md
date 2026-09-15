@@ -97,13 +97,13 @@ Three views over the one graph:
   document allowed and no more, so some are a bare year and a few are a bare
   time of day.
 
-Asking a question streams the pipeline's stages, and the graph unfolds a ring at
-a time in the order the answer was reasoned out: the passages the question
+Asking a question streams the pipeline's stages, and the graph unfolds a stage
+at a time in the order the answer was reasoned out: the passages the question
 matched, the records extracted from them, then the neighbourhood the graph
-contributes on top. Roughly: rings by 2 seconds, answer by 14 with
+contributes on top — laid out as a graph, the way Aura draws a result. Roughly: rings by 2 seconds, answer by 14 with
 `hybrid-cypher`, 45 with the agent.
 
-Each ring is capped so the whole unfold lands just under the explorer's caption
+Each stage is capped so the whole unfold lands just under the explorer's caption
 ceiling — about thirty nodes — which is what lets an answer's evidence be drawn
 the same way as the type overview: every circle named, every relationship typed.
 The labels say what was cut ("16 of 107 records extracted from them"), and the

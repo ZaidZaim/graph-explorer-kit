@@ -5,16 +5,16 @@
  * choice but ships ESM-only, so it has to come from a CDN at runtime, which
  * costs a ~10s cold load and cannot drive the unfold.
  *
- * The unfold is staged, not one burst. /api/ask/stream sends a ring per
- * pipeline stage, and each one is added as it lands, so the picture grows in
- * the order the answer was actually reasoned out:
- *
- *     ( passage ) ──▶ ( entity ) ──▶ ( neighbour )
+ * The unfold is staged, not one burst. /api/ask/stream sends one stage of the
+ * pipeline at a time - the passages that matched, the entities in them, the
+ * neighbourhood the graph adds - and each is merged into the same force layout
+ * as it lands, each new node growing out of a neighbour already on screen. The
+ * result is laid out the way Browser and Aura lay out a result: as a graph.
  *
  * Public surface:
  *   setGraph({nodes, relationships})       replace the graph
  *   beginUnfold()                          ghost the graph, ready for stage one
- *   addStage({nodes, relationships, stage}) reveal one more ring
+ *   addStage({nodes, relationships, stage}) reveal one more stage
  *   unfold({nodes, relationships})         begin + one stage, for one-shot views
  *   collapse()                             return to the whole graph
  *   select(id | null)                      mark one node as selected
@@ -41,13 +41,6 @@ const NODE_POP = 38;        // stagger between siblings arriving in one stage
 const EDGE_DRAW = 380;      // how long an edge takes to draw itself
 const GHOST_ALPHA = 0.07;   // what the rest of the graph fades to
 
-// Fan geometry. The tree is rooted at the retrieved passages and opens to the
-// right, so the picture reads the way the pipeline ran: what the question
-// matched, then the entities in it, then what the graph reasoned over.
-const FAN_SPREAD = Math.PI * 0.86;  // total angle the whole tree occupies
-const RING_RADIUS = 190;    // nominal distance between depth rings
-const RING_GAP = 150;       // minimum gap between consecutive rings
-const NODE_ARC = 88;        // arc length each node needs, so labels do not collide
 // Labels are drawn only where they can be read. Every node labelled at once is
 // the single worst thing a dense graph view does to itself: a thousand names at
 // four pixels of separation is a grey texture that hides the structure it is
@@ -57,11 +50,6 @@ const NODE_ARC = 88;        // arc length each node needs, so labels do not coll
 const LABEL_ALWAYS_BELOW = 40;   // nodes; below this, label everything
 const LABEL_MIN_ON_SCREEN = 11;  // px radius a node needs before it gets a label
 
-// A crowded ring is laid out as two interleaved rows rather than one enormous
-// circle: it halves the radius the ring needs, which is the difference between
-// a readable fan and a distant smudge.
-const CROWDED = 14;         // nodes on a ring before it splits into two rows
-const ROW_STAGGER = 46;     // radial offset between the two rows
 const MIN_NODE_PX = 6;      // never let an *unfolded* node shrink below this
 
 // Node size follows the size of the graph. A thousand records drawn at the
@@ -84,9 +72,6 @@ const DOT_MIN = 0.28;       // floor on the shrink factor
 // The server's ring caps are set to land an unfold just under this.
 const CAPTION_LIMIT = 36;     // nodes; at or below this, captions go inside
 const CAPTION_RADIUS = 34;    // world radius in that mode
-// The unfold lays its rings out on a fan whose arc-length budget per node is
-// NODE_ARC, so a captioned circle there has to stay inside half of it.
-const CAPTION_RADIUS_UNFOLD = 24;
 const CAPTION_LINES = 3;      // most lines of caption a circle will hold
 // Caption size follows the circle's size on screen rather than being fixed.
 // A fixed size fits at one zoom and truncates every caption to four characters
@@ -96,7 +81,6 @@ const CAPTION_RATIO = 0.42;   // of the on-screen radius
 const CAPTION_MIN_PX = 6.5;
 const CAPTION_MAX_PX = 12;
 
-const EDGE_BOW = 0.10;      // how far an edge bows away from a straight chord
 
 const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
 const easeInOutCubic = (t) => (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2);
@@ -127,7 +111,7 @@ export async function createRenderer(container, opts) {
 }
 
 /* =======================================================================
-   Canvas — force-directed at rest, a rooted fan while unfolding
+   Canvas — force-directed, standing graph and unfolded result alike
    ======================================================================= */
 
 function createCanvasRenderer(container, opts) {
@@ -185,9 +169,15 @@ function createCanvasRenderer(container, opts) {
    *  keeps the whole graph roughly stage-sized whatever its size, which is what
    *  lets clusters read as clusters.
    */
+  /** How many nodes are actually being looked at: the revealed set during an
+   *  unfold, everything otherwise. Every size decision keys off this, so the
+   *  thirty nodes of an answer are laid out and drawn as thirty nodes, not as
+   *  thirty nodes standing in front of seven hundred ghosts. */
+  const visibleCount = () => Math.max(1, revealed ? revealed.size : nodes.length);
+
   function spacing() {
     const { w, h } = size();
-    const n = Math.max(nodes.length, 1);
+    const n = visibleCount();
     const area = Math.max(w * h, 1);
     const ideal = Math.max(34, Math.min(165, 0.9 * Math.sqrt(area / n)));
     // Captioned circles are much bigger than dots, so they need a floor of
@@ -196,7 +186,10 @@ function createCanvasRenderer(container, opts) {
     // roughly a circle between neighbours, which is where the relationship
     // types have to fit — pack them tighter and every type label collides with
     // a circle and is dropped.
-    return captioned() ? Math.max(ideal, CAPTION_RADIUS * 3.3) : ideal;
+    // 2.6 radii between centres leaves a gap of about half a circle, which is
+    // the density Browser draws a result at: close enough to read as one
+    // picture, open enough for a type label between two circles.
+    return captioned() ? Math.max(ideal, CAPTION_RADIUS * 2.6) : ideal;
   }
 
   /** Repulsion falls off as 1/d², so beyond a few multiples of the spacing it
@@ -255,10 +248,17 @@ function createCanvasRenderer(container, opts) {
     // disconnected components drifting apart for ever, but at full strength on
     // a thousand nodes it packs every component into one ball and hides the
     // cluster structure that makes the picture worth looking at.
-    const pull = nodes.length > 200 ? 0.004 : 0.012;
+    const pull = visibleCount() > 200 ? 0.004 : 0.012;
+    // Gravity is anisotropic: it pulls harder along the canvas's shorter axis.
+    // A force layout settles into a disc, and a disc fitted into a wide, short
+    // area is height-bound with two thirds of the width empty. Squeezing it
+    // vertically in proportion to the aspect ratio gives an ellipse the shape
+    // of the stage, which is what lets the circles be drawn large.
+    const { w: gw, h: gh } = size();
+    const aspect = Math.min(2.4, Math.max(1, gw / Math.max(gh, 1)));
     for (const n of free) {
       n.vx -= n.x * pull;
-      n.vy -= n.y * pull;
+      n.vy -= n.y * pull * aspect;
       n.vx *= 0.86; n.vy *= 0.86;
       n.x += Math.max(-30, Math.min(30, n.vx)) * alpha;
       n.y += Math.max(-30, Math.min(30, n.vy)) * alpha;
@@ -331,177 +331,10 @@ function createCanvasRenderer(container, opts) {
 
   /* ---- unfold layout ---- */
 
-  /** Lay the revealed nodes out as a fan rooted at the question.
-   *
-   *  Depth comes from the stage that delivered a node, not from a walk of the
-   *  edges, so the rings are exactly ask / passages / entities / neighbourhood
-   *  even when an entity-to-entity edge would short-circuit the walk. A node's
-   *  parent is the least-loaded neighbour one ring in, which stops the fan
-   *  bunching everything under whichever passage happened to arrive first.
-   */
-  function flowLayout(ids) {
-    const inSet = new Set(ids);
-    const adj = new Map(ids.map((id) => [id, []]));
-    for (const e of edges) {
-      if (inSet.has(e.from) && inSet.has(e.to)) {
-        adj.get(e.from).push(e.to);
-        adj.get(e.to).push(e.from);
-      }
-    }
-
-    const depth = new Map();
-    for (const id of ids) depth.set(id, stageOf.get(id) ?? 1);
-
-    const byDepth = new Map();
-    for (const id of ids) {
-      const d = depth.get(id);
-      if (!byDepth.has(d)) byDepth.set(d, []);
-      byDepth.get(d).push(id);
-    }
-    const depths = [...byDepth.keys()].sort((a, b) => a - b);
-    const roots = byDepth.get(depths[0]);
-
-    // Parent assignment, ring by ring outward.
-    const children = new Map(ids.map((id) => [id, []]));
-    const parent = new Map();
-    const leastLoaded = (candidates) =>
-      candidates.reduce((best, o) =>
-        (children.get(o).length < children.get(best).length ? o : best));
-
-    for (const d of depths.slice(1)) {
-      let inner = [];
-      for (const prev of depths) {
-        if (prev >= d) break;
-        inner = byDepth.get(prev);
-      }
-      for (const id of byDepth.get(d)) {
-        const linked = (adj.get(id) ?? []).filter((o) => depth.get(o) < d);
-        // No edge to an inner ring means the retrieval reached it some other
-        // way; hang it off the emptiest inner node rather than dropping it.
-        const par = linked.length ? leastLoaded(linked)
-                  : inner.length ? leastLoaded(inner)
-                  : roots[0];
-        if (par === undefined || par === id) continue;
-        parent.set(id, par);
-        children.get(par).push(id);
-      }
-    }
-
-    // Leaf-count weighting keeps dense branches from overlapping thin ones.
-    const weight = new Map();
-    const weigh = (id) => {
-      const kids = children.get(id) ?? [];
-      const w = kids.length ? kids.reduce((s, c) => s + weigh(c), 0) : 1;
-      weight.set(id, w);
-      return w;
-    };
-    roots.forEach(weigh);
-
-    // A ring holding N nodes across FAN_SPREAD radians needs N*NODE_ARC of arc
-    // length, or the labels collide. Thirty entities on a nominal ring is the
-    // common case and reads as one blob without this.
-    const ringR = new Map();
-    const ringRows = new Map();
-    const ringStagger = new Map();
-    let previous = 0;
-    for (const d of depths) {
-      const count = byDepth.get(d).length;
-      const rows = count > CROWDED ? 2 : 1;
-      // A captioned ring needs only enough arc to clear the circles themselves;
-      // NODE_ARC is sized for labels sitting *outside* the nodes, which spreads
-      // the fan half again as wide as it has to be — and since the whole fan is
-      // then fitted to the stage, that spread comes straight off how big each
-      // circle ends up on screen.
-      const arc = captioned() ? CAPTION_RADIUS_UNFOLD * 2.6 : NODE_ARC;
-      const needed = (count * arc) / (FAN_SPREAD * rows);
-      // Likewise the gap between rings and the stagger between a crowded ring's
-      // two rows: both were sized to clear labels hanging below radius-12 dots,
-      // and a radius-24 captioned circle needs the stagger to clear its own
-      // diameter — at the old 46 the two rows overlapped — but far less gap.
-      const gap = captioned() ? CAPTION_RADIUS_UNFOLD * 3.4 : RING_GAP;
-      const step = captioned() ? CAPTION_RADIUS_UNFOLD * 5 : RING_RADIUS;
-      const stagger = captioned() ? CAPTION_RADIUS_UNFOLD * 2.4 : ROW_STAGGER;
-      const isHub = d === depths[0] && count === 1;
-      const r = isHub
-        ? 0
-        : Math.max(previous + gap, (d - depths[0]) * step, needed);
-      ringR.set(d, r);
-      ringRows.set(d, rows);
-      ringStagger.set(d, stagger);
-      previous = r + (rows > 1 ? stagger : 0);
-    }
-
-    // In a wide, short area the fan is laid out as rows rather than rings: the
-    // passages along the top, the entities under them, the neighbourhood along
-    // the bottom. A fan with a 155-degree spread does not survive being turned
-    // to open downward — its outer rings curl up to the height of the inner one
-    // and the three depths collapse into a single jumbled band. Rows keep the
-    // order the pipeline ran in readable top to bottom, and use the width.
-    //
-    // The sector-to-x mapping is shared by every row, so children sit under
-    // their parents; it is scaled so the widest row still gets `arc` per node.
-    const { w: cw, h: ch } = size();
-    const layered = cw > ch * 1.3;
-    const arcPer = captioned() ? CAPTION_RADIUS_UNFOLD * 2.6 : NODE_ARC;
-    let widest = 0;
-    for (const d of depths) {
-      const count = byDepth.get(d).length;
-      widest = Math.max(widest, (count * arcPer) / (ringRows.get(d) ?? 1));
-    }
-    const xScale = widest / FAN_SPREAD;
-    const layerGap = captioned() ? CAPTION_RADIUS_UNFOLD * 5.2 : RING_GAP;
-    // Crowded rows alternate nodes up and down; the offset is chosen so two
-    // neighbours a half-arc apart horizontally still clear each other.
-    const layerStagger = captioned() ? CAPTION_RADIUS_UNFOLD * 1.15 : ROW_STAGGER * 0.6;
-    const depthIndex = new Map(depths.map((d, i) => [d, i]));
-
-    const pos = new Map();
-    const placedInRing = new Map(depths.map((d) => [d, 0]));
-    const place = (id, a0, a1) => {
-      const d = depth.get(id);
-      const mid = (a0 + a1) / 2;
-      const i = placedInRing.get(d) ?? 0;
-      placedInRing.set(d, i + 1);
-      // Siblings are placed consecutively, so alternating the radius puts
-      // angular neighbours on different rows without disturbing the order.
-      const base = ringR.get(d) ?? 0;
-      const stagger = ringStagger.get(d) ?? ROW_STAGGER;
-      const offset = ringRows.get(d) > 1 ? (i % 2 ? stagger : -stagger) : 0;
-      const r = base > 0 ? base + offset : 0;
-      if (layered) {
-        const row = depthIndex.get(d) ?? 0;
-        const stag = ringRows.get(d) > 1 ? (i % 2 ? layerStagger : -layerStagger) : 0;
-        pos.set(id, { x: mid * xScale, y: row * layerGap + stag });
-      } else {
-        pos.set(id, { x: Math.cos(mid) * r, y: Math.sin(mid) * r });
-      }
-
-      const kids = children.get(id) ?? [];
-      const total = kids.reduce((s, c) => s + (weight.get(c) ?? 1), 0) || 1;
-      let a = a0;
-      for (const c of kids) {
-        const span = ((a1 - a0) * (weight.get(c) ?? 1)) / total;
-        place(c, a, a + span);
-        a += span;
-      }
-    };
-
-    // Root sectors are weighted too: an even split starves a root carrying a
-    // large subtree while a leaf root wastes its slice.
-    const rootTotal = roots.reduce((s, r) => s + (weight.get(r) ?? 1), 0) || 1;
-    let angle = -FAN_SPREAD / 2;
-    for (const r of roots) {
-      const span = (FAN_SPREAD * (weight.get(r) ?? 1)) / rootTotal;
-      place(r, angle, angle + span);
-      angle += span;
-    }
-    return { pos, depth, parent };
-  }
-
-  // The first stage of an unfold holds one node. Fitting to its bounding box
-  // would slam the camera to maximum zoom, then back out again as the rings
-  // arrive; a floor on the extent keeps the opening shot steady.
-  const MIN_EXTENT = 620;
+  // Smallest extent the fit will frame. Without a floor a one-node result is
+  // zoomed to the camera's maximum and a two-node one to whatever puts their
+  // centres at the viewport's edges.
+  const MIN_EXTENT = 160;
 
   function easeCameraTo(subset, pad = null) {
     const target = subset?.length ? subset : nodes;
@@ -545,28 +378,36 @@ function createCanvasRenderer(container, opts) {
 
   /* ---- unfold ---- */
 
-  /** Start a fresh unfold: ghost the standing graph, ready for the first ring. */
+  /** Start a fresh unfold: freeze and fade the standing graph. */
   function beginUnfold() {
     revealed = new Set();
     stageOf = new Map();
-    alpha = 0;                          // the ghosted graph stops drifting
-    for (const e of edges) { e.revealed = false; }
+    for (const e of edges) e.revealed = false;
     for (const n of nodes) {
-      n.pinned = false;
+      // Ghosts hold still. They are the backdrop, and the layout that follows
+      // is for the revealed nodes alone.
+      n.pinned = true;
       n.targetAppear = GHOST_ALPHA;
       n.tx = n.ty = undefined;
       n.depth = undefined;
       n.isSeed = false;
+      n.vx = n.vy = 0;
     }
+    alpha = 0;
   }
 
-  /** Reveal one more ring. Nodes already on screen glide to their new places;
-   *  the new ones grow out of their parent, staggered, and their edges draw
-   *  themselves in behind them. */
+  /** Reveal one more stage.
+   *
+   *  The revealed subgraph is laid out by the same force simulation as the
+   *  standing graph — the way Browser and Aura lay out a result — rather than
+   *  on a geometric fan. A fan encodes depth beautifully and reads as a
+   *  diagram; a force layout encodes *connection*, which is what a graph is
+   *  for, and the stages still arrive in order because each new node starts
+   *  where its already-visible neighbour is and grows out of it.
+   */
   function addStage({ nodes: incoming = [], relationships = [], stage = 1 } = {}) {
     if (!revealed) beginUnfold();
     mergeGraph({ nodes: incoming, relationships });
-    alpha = 0;
 
     const fresh = new Set();
     for (const n of incoming) {
@@ -577,48 +418,58 @@ function createCanvasRenderer(container, opts) {
     }
     if (!revealed.size) return;
 
-    const ids = [...revealed];
-    const { pos, depth, parent } = flowLayout(ids);
-    const now = performance.now();
+    // Where each new node should appear from: a neighbour already on screen.
+    const neighbours = new Map();
+    const link = (a, b) => {
+      if (!neighbours.has(a)) neighbours.set(a, []);
+      neighbours.get(a).push(b);
+    };
+    for (const e of edges) {
+      if (revealed.has(e.from) && revealed.has(e.to)) { link(e.from, e.to); link(e.to, e.from); }
+    }
+    const settled = [...revealed].filter((id) => !fresh.has(id)).map((id) => byId.get(id));
+    const centre = settled.length
+      ? {
+          x: settled.reduce((t, n) => t + n.x, 0) / settled.length,
+          y: settled.reduce((t, n) => t + n.y, 0) / settled.length,
+        }
+      : { x: 0, y: 0 };
 
-    let popped = 0;
-    for (const id of ids) {
+    const now = performance.now();
+    const k = spacing();
+    for (const id of revealed) {
       const n = byId.get(id);
-      const p = pos.get(id);
-      if (!n || !p) continue;
-      if (fresh.has(id)) {
-        // New nodes emerge from wherever their parent currently is, so the ring
-        // visibly grows out of the one inside it rather than fading in on top.
-        const par = parent.get(id) ? byId.get(parent.get(id)) : null;
-        n.x = par ? par.x : p.x;
-        n.y = par ? par.y : p.y;
-        n.appear = 0;
-        n.animFrom = 0;
-        n.animStart = now + popped++ * NODE_POP;
-      } else {
-        n.animFrom = n.appear ?? 1;
-        n.animStart = now;
-      }
-      n.depth = depth.get(id);
+      n.pinned = false;
+      n.targetAppear = 1;
+      n.tx = n.ty = undefined;
       n.isSeed = stageOf.get(id) === 1;
-      n.pinned = true;
-      n.fx = n.x; n.fy = n.y;
-      n.tx = p.x; n.ty = p.y;
+      n.depth = (stageOf.get(id) ?? 1) - 1;
+      if (!fresh.has(id)) continue;
+      const anchor = (neighbours.get(id) ?? [])
+        .map((other) => byId.get(other))
+        .find((other) => other && !fresh.has(other.id));
+      const from = anchor ?? centre;
+      const angle = Math.random() * Math.PI * 2;
+      const reach = k * (0.5 + 0.5 * Math.random());
+      n.x = from.x + Math.cos(angle) * reach;
+      n.y = from.y + Math.sin(angle) * reach;
+      n.vx = n.vy = 0;
+      n.appear = 0;
     }
 
     for (const e of edges) {
       const was = e.revealed;
       e.revealed = revealed.has(e.from) && revealed.has(e.to);
       if (e.revealed && !was) {
-        const a = byId.get(e.from), b = byId.get(e.to);
         e.grow = 0;
-        e.animStart =
-          Math.max(a?.animStart ?? now, b?.animStart ?? now) + NODE_FADE * 0.45;
+        e.animStart = now + NODE_FADE * 0.45;
       }
     }
 
-    // Fit to where the nodes are going, not where they are now.
-    setTimeout(() => easeCameraTo(nodes.filter((n) => revealed?.has(n.id))), 60);
+    alpha = 1;                          // the layout runs on the revealed nodes
+    for (const delay of [450, 1300, 2600]) {
+      setTimeout(() => easeCameraTo(nodes.filter((n) => revealed?.has(n.id))), delay);
+    }
   }
 
   function collapse() {
@@ -652,26 +503,26 @@ function createCanvasRenderer(container, opts) {
   /** Control point for an edge, perpendicular to the chord.
    *  Straight lines across a fan read as a ball of string; a consistent bow
    *  separates the two directions of a pair and follows the ring's curve. */
-  function control(a, b) {
-    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+  /** The segment of the straight edge from a to b that lies *between* the two
+   *  circles, so the line meets each rim rather than running under the fill —
+   *  which is what makes an arrowhead land on the edge of its target. */
+  function edgeSpan(a, b) {
     const dx = b.x - a.x, dy = b.y - a.y;
-    return { x: mx - dy * EDGE_BOW, y: my + dx * EDGE_BOW };
+    const d = Math.hypot(dx, dy) || 1;
+    const ux = dx / d, uy = dy / d;
+    const ra = radius(a), rb = radius(b);
+    return {
+      x0: a.x + ux * ra, y0: a.y + uy * ra,
+      x1: b.x - ux * rb, y1: b.y - uy * rb,
+      ux, uy, length: Math.max(0, d - ra - rb),
+    };
   }
 
-  /** Stroke a quadratic from a to b, truncated at t via De Casteljau, so the
-   *  edge can draw itself in during the unfold. */
-  function strokeCurve(a, b, t) {
-    const c = control(a, b);
+  /** Stroke the edge, truncated at t so it can draw itself in. */
+  function strokeEdge(span, t) {
     ctx.beginPath();
-    ctx.moveTo(a.x, a.y);
-    if (t >= 0.999) {
-      ctx.quadraticCurveTo(c.x, c.y, b.x, b.y);
-    } else {
-      const c1 = { x: a.x + (c.x - a.x) * t, y: a.y + (c.y - a.y) * t };
-      const c2 = { x: c.x + (b.x - c.x) * t, y: c.y + (b.y - c.y) * t };
-      const end = { x: c1.x + (c2.x - c1.x) * t, y: c1.y + (c2.y - c1.y) * t };
-      ctx.quadraticCurveTo(c1.x, c1.y, end.x, end.y);
-    }
+    ctx.moveTo(span.x0, span.y0);
+    ctx.lineTo(span.x0 + (span.x1 - span.x0) * t, span.y0 + (span.y1 - span.y0) * t);
     ctx.stroke();
   }
 
@@ -697,14 +548,17 @@ function createCanvasRenderer(container, opts) {
    *  what lets an answer's evidence be as legible as the type overview: the
    *  rings are capped server-side precisely so they fit here.
    */
-  const captioned = () =>
-    (revealed ? revealed.size : nodes.length) <= CAPTION_LIMIT;
+  const captioned = () => visibleCount() <= CAPTION_LIMIT;
 
-  const captionRadius = () => (revealed ? CAPTION_RADIUS_UNFOLD : CAPTION_RADIUS);
+  /** Ghosts are the standing graph faded behind an unfold. In caption mode they
+   *  are not drawn at all: Browser shows the result and nothing else, and seven
+   *  hundred faint dots behind thirty captioned circles is texture, not context. */
+  const isGhost = (n) => Boolean(revealed && !revealed.has(n.id));
+  const ghostHidden = (n) => isGhost(n) && captioned();
 
   /** Shrink factor for the current graph size, 1 for anything comfortable. */
   function nodeScale() {
-    const n = Math.max(nodes.length, 1);
+    const n = visibleCount();
     return Math.max(DOT_MIN, Math.min(1, Math.sqrt(COMFORTABLE / n)));
   }
 
@@ -719,7 +573,7 @@ function createCanvasRenderer(container, opts) {
     // faint backdrop, and inflating a thousand of them to 34 units would bury
     // the rings the unfold exists to show.
     const ghosted = revealed && !revealed.has(n.id);
-    if (captioned() && !ghosted) return Math.max(explicit ?? 0, captionRadius());
+    if (captioned() && !ghosted) return Math.max(explicit ?? 0, CAPTION_RADIUS);
     return nominal * nodeScale();
   };
   /** Grown by `appear` on the way in, and floored so a wide fan zoomed out to
@@ -751,6 +605,7 @@ function createCanvasRenderer(container, opts) {
     for (const e of edges) {
       const a = byId.get(e.from), b = byId.get(e.to);
       if (!a || !b) continue;
+      if (ghostHidden(a) || ghostHidden(b)) continue;
       const g = e.grow ?? 1;
       if (g <= 0.01) continue;
       const lit = !revealed || e.revealed;
@@ -759,43 +614,45 @@ function createCanvasRenderer(container, opts) {
       const flow = lit && (isChunk(a) || isChunk(b));
       // Edges thin and fade as the graph grows. Eight hundred of them at the
       // weight that suits eighty overlap into a solid white mass in the middle,
-      // which reads as one bright blob rather than as connections — the nodes
-      // disappear behind their own edges.
-      const dense = nodes.length > 200;
+      // which reads as one bright blob rather than as connections.
+      const dense = visibleCount() > 200;
+      const span = edgeSpan(a, b);
+      if (span.length <= 0) continue;
       ctx.lineWidth = (flow ? 1.8 : lit ? (dense ? 0.85 : 1.5) : 1) / view.scale;
       ctx.strokeStyle = flow
-        ? `rgba(110,231,255,${0.18 + 0.38 * g})`
+        ? `rgba(110,231,255,${0.22 + 0.4 * g})`
         : lit
-        ? `rgba(196,214,236,${(dense ? 0.05 + 0.08 * g : 0.10 + 0.20 * g)})`
+        ? `rgba(196,214,236,${(dense ? 0.05 + 0.08 * g : 0.16 + 0.26 * g)})`
         : `rgba(255,255,255,${0.05 * g})`;
-      strokeCurve(a, b, g);
+      strokeEdge(span, g);
 
+      // Arrowhead on the target's rim, the way Browser draws direction.
       if (lit && g > 0.98 && (captioned() || view.scale > 0.5)) {
-        const c = control(a, b);
-        const ang = Math.atan2(b.y - c.y, b.x - c.x);   // tangent at the end
-        const r = radius(b) + 4;
-        const tx = b.x - Math.cos(ang) * r, ty = b.y - Math.sin(ang) * r;
-        ctx.fillStyle = flow ? 'rgba(110,231,255,0.65)' : 'rgba(196,214,236,0.42)';
+        const size = captioned() ? 9 : 7;
+        const tx = span.x1, ty = span.y1;
+        ctx.fillStyle = flow ? 'rgba(110,231,255,0.8)' : 'rgba(196,214,236,0.6)';
         ctx.beginPath();
         ctx.moveTo(tx, ty);
-        ctx.lineTo(tx - Math.cos(ang - 0.4) * 9, ty - Math.sin(ang - 0.4) * 9);
-        ctx.lineTo(tx - Math.cos(ang + 0.4) * 9, ty - Math.sin(ang + 0.4) * 9);
+        ctx.lineTo(tx - (span.ux * 0.92 - span.uy * 0.39) * size,
+                   ty - (span.uy * 0.92 + span.ux * 0.39) * size);
+        ctx.lineTo(tx - (span.ux * 0.92 + span.uy * 0.39) * size,
+                   ty - (span.uy * 0.92 - span.ux * 0.39) * size);
         ctx.closePath();
         ctx.fill();
       }
-      // The relationship type, on the relationship. Previously this needed
-      // view.scale > 1.05, which a graph fitted to the stage never reaches — so
-      // the types were effectively never drawn. Now they appear whenever the
-      // graph is small enough to be read, which is the case that wants them.
-      // Collected rather than drawn: they have to be placed after the node
-      // captions, so that a type never lands on top of a node's own name.
+      // The relationship type, along the relationship. Collected rather than
+      // drawn: it is placed after the node captions, so a type never lands on
+      // top of a node's own name.
       if (lit && g > 0.98 && (captioned() || view.scale > 1.05)) {
-        // Midpoint of the quadratic, not of the chord.
-        const c2 = control(a, b);
+        let angle = Math.atan2(span.uy, span.ux);
+        // Never upside down: text reads left to right whichever way the edge runs.
+        if (angle > Math.PI / 2 || angle < -Math.PI / 2) angle += Math.PI;
         edgeLabels.push({
           text: e.type,
-          x: 0.25 * a.x + 0.5 * c2.x + 0.25 * b.x,
-          y: 0.25 * a.y + 0.5 * c2.y + 0.25 * b.y,
+          x: (span.x0 + span.x1) / 2,
+          y: (span.y0 + span.y1) / 2,
+          angle,
+          along: span.length,
           weight: e.properties?.count ?? 0,
           flow,
         });
@@ -806,6 +663,7 @@ function createCanvasRenderer(container, opts) {
     const deferredLabels = [];
     const reserved = [];
     for (const n of nodes) {
+      if (ghostHidden(n)) continue;
       const appear = n.appear ?? 1;
       if (appear <= 0.02) continue;
       const r = radius(n);
@@ -895,13 +753,13 @@ function createCanvasRenderer(container, opts) {
   const overlaps = (a, b) =>
     a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
 
-  /** Relationship types, heaviest first, skipping any that would collide.
+  /** Relationship types, set along their edges, heaviest first, skipping any
+   *  that would collide with a circle or with a type already placed.
    *
-   *  Every edge labelled is how the middle of a hub-and-spoke graph turns into
-   *  a pile of overstruck words: fourteen MENTIONS edges leave Document, and
-   *  their midpoints are all in the same small area. Placing them in weight
-   *  order means the labels that survive are the ones standing for the most
-   *  relationships. */
+   *  Along the edge rather than horizontal at its midpoint: that is how every
+   *  Neo4j surface draws a type, and it is also the only orientation in which a
+   *  word can sit on a short edge between two large circles without covering
+   *  one of them. A type longer than its edge is dropped rather than overlapped. */
   function drawEdgeLabels(candidates, reserved) {
     if (!candidates.length) return;
     const px = (v) => v / view.scale;
@@ -913,16 +771,23 @@ function createCanvasRenderer(container, opts) {
     ctx.textBaseline = 'middle';
     for (const item of candidates) {
       const w = ctx.measureText(item.text).width;
-      const box = screenBox(item.x, item.y, w + px(6), px(12));
+      if (w > item.along - px(10)) continue;
+      // Screen-space bounding box of the rotated text, for the collision test.
+      const c = Math.abs(Math.cos(item.angle)), sn = Math.abs(Math.sin(item.angle));
+      const bw = w * c + px(12) * sn, bh = w * sn + px(12) * c;
+      const box = screenBox(item.x, item.y, bw + px(6), bh + px(4));
       if (placed.some((other) => overlaps(box, other))) continue;
       placed.push(box);
-      // Stroked in the stage colour so the line does not run through the
-      // middle of the word.
-      ctx.lineWidth = px(3.5);
+      ctx.save();
+      ctx.translate(item.x, item.y);
+      ctx.rotate(item.angle);
+      // Stroked in the stage colour so the line does not run through the word.
+      ctx.lineWidth = px(4);
       ctx.strokeStyle = STAGE_BG;
-      ctx.strokeText(item.text, item.x, item.y);
-      ctx.fillStyle = item.flow ? 'rgba(110,231,255,0.9)' : 'rgba(148,170,196,0.95)';
-      ctx.fillText(item.text, item.x, item.y);
+      ctx.strokeText(item.text, 0, 0);
+      ctx.fillStyle = item.flow ? 'rgba(110,231,255,0.92)' : 'rgba(170,190,214,0.95)';
+      ctx.fillText(item.text, 0, 0);
+      ctx.restore();
     }
     ctx.restore();
   }
@@ -1130,6 +995,7 @@ function createCanvasRenderer(container, opts) {
     for (let i = nodes.length - 1; i >= 0; i--) {
       const n = nodes[i];
       if ((n.appear ?? 1) < 0.15) continue;
+      if (ghostHidden(n)) continue;
       if ((n.x - x) ** 2 + (n.y - y) ** 2 <= (radius(n) + 6) ** 2) return n;
     }
     return null;
@@ -1215,10 +1081,8 @@ function createCanvasRenderer(container, opts) {
       revealed: revealed ? revealed.size : null,
       nodes: nodes.length,
       pinned: nodes.filter((n) => n.pinned).length,
-      rings: nodes.filter((n) => n.pinned).reduce((acc, n) => {
-        const r = Math.round(Math.hypot(n.tx ?? 0, n.ty ?? 0));
-        acc[n.depth] = acc[n.depth] ?? { count: 0, radius: r };
-        acc[n.depth].count++;
+      stages: [...stageOf.values()].reduce((acc, stage) => {
+        acc[stage] = (acc[stage] ?? 0) + 1;
         return acc;
       }, {}),
       view: { ...view }, insets: { ...insets },
