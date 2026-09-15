@@ -624,6 +624,32 @@ def ask_via_pipeline(question: str, retriever: str, top_k: int) -> dict:
     }
 
 
+#: How much of the agent's trail is drawn. An agent that calls nine tools reads
+#: several hundred entities, and all of them plus their neighbours is a thousand
+#: nodes in a single ring — a smear of edges, not a picture of the evidence.
+#: The count it read is reported either way.
+AGENT_EVIDENCE_LIMIT = 24
+
+
+def most_connected(ids: list[str], limit: int) -> list[str]:
+    """The `limit` most connected of `ids`. Connectedness is the right ranking
+    for a picture of evidence: the entities tying the most others together are
+    the ones that explain how the rest hang off them."""
+    if len(ids) <= limit:
+        return ids
+    records = run(
+        """
+        MATCH (n:__Entity__) WHERE elementId(n) IN $ids
+        RETURN elementId(n) AS id, count { (n)-[]-(:__Entity__) } AS degree
+        ORDER BY degree DESC, n.name
+        LIMIT $limit
+        """,
+        ids=ids,
+        limit=limit,
+    )
+    return [r["id"] for r in records]
+
+
 async def ask_via_agent(question: str, top_k: int) -> dict:
     """The agent picks its own retrievers, and may use several.
 
@@ -633,19 +659,23 @@ async def ask_via_agent(question: str, top_k: int) -> dict:
     """
     result = await ask_agent(agent(), question)
     ids = result.trail.entity_ids
-    subgraph = await (
-        run_in_threadpool(subgraph_for_ids, ids, True)
-        if ids
+    if ids:
+        shown = await run_in_threadpool(most_connected, ids, AGENT_EVIDENCE_LIMIT)
+        # No neighbour expansion here: the agent's own trail already records the
+        # neighbours its lookups returned, and expanding on top of that is what
+        # turns two dozen entities back into several hundred.
+        subgraph = await run_in_threadpool(subgraph_for_ids, shown, False)
+    else:
         # No tool was called — a greeting, or a refusal. Fall back to the lookup
         # the fixed retrievers use so the panel is never inexplicably empty.
-        else run_in_threadpool(evidence_subgraph, question, top_k)
-    )
+        subgraph = await run_in_threadpool(evidence_subgraph, question, top_k)
     return {
         "answer": result.answer,
         # Rendered into the context panel the fixed retrievers use, because the
         # tool calls are this mode's version of "show your working".
         "context": result.trail.calls or ["(the agent answered without calling a tool)"],
         "subgraph": subgraph,
+        "read": len(ids),
     }
 
 
@@ -715,7 +745,7 @@ def retrieved_chunks(question: str, top_k: int) -> list[dict]:
 #: scanned report can carry eighty extracted records, so five passages reach a
 #: hundred and fifty — more than the fan can lay out and more than anyone reads.
 #: The ones kept are those the retrieved passages have in common.
-ENTITY_RING_LIMIT = 45
+ENTITY_RING_LIMIT = 16
 
 
 def entities_from_chunks(chunk_ids: list[str]) -> tuple[list[dict], list[dict], int]:
@@ -767,7 +797,10 @@ def entities_from_chunks(chunk_ids: list[str]) -> tuple[list[dict], list[dict], 
 #: How many of the surrounding entities the outer ring shows. Every retrieved
 #: entity has neighbours, so an uncapped ring is most of the graph again — which
 #: is both unreadable and a poor description of what the answer leaned on.
-NEIGHBOUR_LIMIT = 20
+#: With the passage and entity rings, this lands the whole unfold just under the
+#: explorer's caption ceiling, so an answer's evidence is drawn with every
+#: circle named and every relationship typed.
+NEIGHBOUR_LIMIT = 8
 
 
 def neighbours_of(entity_ids: list[str], limit: int = NEIGHBOUR_LIMIT) -> tuple[list[dict], int]:
@@ -935,11 +968,16 @@ async def agent_stages(question: str, top_k: int) -> AsyncIterator[str]:
         )
         result = await ask_via_agent(question, top_k)
         subgraph = result["subgraph"]
+        shown, read = len(subgraph["nodes"]), result.get("read", 0)
         yield sse(
             "unfold",
             {
                 "stage": "evidence",
-                "label": f"{len(subgraph['nodes'])} entities the agent read",
+                "label": (
+                    f"{shown} of {read} entities the agent read"
+                    if read > shown
+                    else f"{shown} entities the agent read"
+                ),
                 "nodes": subgraph["nodes"],
                 "relationships": subgraph["relationships"],
             },

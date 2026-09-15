@@ -79,10 +79,14 @@ const DOT_MIN = 0.28;       // floor on the shrink factor
 // are actually studying — nothing has to be matched up with a legend, and the
 // direction of each edge is on the edge. It only works while the circles are
 // big enough to hold text, which is why it is a mode and not the only mode.
-// Thirty is about the ceiling: sixty captioned circles fill the stage and each
-// caption comes back to three characters, which is worse than no caption at all.
-const CAPTION_LIMIT = 30;     // nodes; at or below this, captions go inside
+// Around thirty-five is the ceiling: sixty captioned circles fill the stage and
+// each caption comes back to three characters, which is worse than no caption.
+// The server's ring caps are set to land an unfold just under this.
+const CAPTION_LIMIT = 36;     // nodes; at or below this, captions go inside
 const CAPTION_RADIUS = 34;    // world radius in that mode
+// The unfold lays its rings out on a fan whose arc-length budget per node is
+// NODE_ARC, so a captioned circle there has to stay inside half of it.
+const CAPTION_RADIUS_UNFOLD = 24;
 const CAPTION_LINES = 3;      // most lines of caption a circle will hold
 // Caption size follows the circle's size on screen rather than being fixed.
 // A fixed size fits at one zoom and truncates every caption to four characters
@@ -394,7 +398,13 @@ function createCanvasRenderer(container, opts) {
     for (const d of depths) {
       const count = byDepth.get(d).length;
       const rows = count > CROWDED ? 2 : 1;
-      const needed = (count * NODE_ARC) / (FAN_SPREAD * rows);
+      // A captioned ring needs only enough arc to clear the circles themselves;
+      // NODE_ARC is sized for labels sitting *outside* the nodes, which spreads
+      // the fan half again as wide as it has to be — and since the whole fan is
+      // then fitted to the stage, that spread comes straight off how big each
+      // circle ends up on screen.
+      const arc = captioned() ? CAPTION_RADIUS_UNFOLD * 2.6 : NODE_ARC;
+      const needed = (count * arc) / (FAN_SPREAD * rows);
       const isHub = d === depths[0] && count === 1;
       const r = isHub
         ? 0
@@ -631,8 +641,17 @@ function createCanvasRenderer(container, opts) {
 
   const isChunk = (n) => n.label === 'Chunk';
 
-  /** Whether to draw Browser-style: caption inside the circle, typed edges. */
-  const captioned = () => nodes.length <= CAPTION_LIMIT && !revealed;
+  /** Whether to draw Browser-style: caption inside the circle, typed edges.
+   *
+   *  During an unfold only the revealed rings count — the ghosted graph behind
+   *  them may be a thousand nodes, and they are not what is being read. That is
+   *  what lets an answer's evidence be as legible as the type overview: the
+   *  rings are capped server-side precisely so they fit here.
+   */
+  const captioned = () =>
+    (revealed ? revealed.size : nodes.length) <= CAPTION_LIMIT;
+
+  const captionRadius = () => (revealed ? CAPTION_RADIUS_UNFOLD : CAPTION_RADIUS);
 
   /** Shrink factor for the current graph size, 1 for anything comfortable. */
   function nodeScale() {
@@ -647,7 +666,11 @@ function createCanvasRenderer(container, opts) {
     // needs, or the caption would not fit in the thing it names.
     const explicit = n.radius;
     const nominal = explicit ?? (n.id === selected ? 17 : isChunk(n) ? 15 : NODE_RADIUS);
-    if (captioned()) return Math.max(explicit ?? 0, CAPTION_RADIUS);
+    // Ghosted nodes never get the caption radius: during an unfold they are the
+    // faint backdrop, and inflating a thousand of them to 34 units would bury
+    // the rings the unfold exists to show.
+    const ghosted = revealed && !revealed.has(n.id);
+    if (captioned() && !ghosted) return Math.max(explicit ?? 0, captionRadius());
     return nominal * nodeScale();
   };
   /** Grown by `appear` on the way in, and floored so a wide fan zoomed out to
@@ -774,8 +797,8 @@ function createCanvasRenderer(container, opts) {
 
       // Browser-style: the caption lives inside the circle it names, so there
       // is nothing to match up against a legend and nothing to collide with.
-      if (captioned()) {
-        const box = drawCaptionInside(n, r, lit ? base : GHOST_FILL, lit ? 1 : 0.5);
+      if (captioned() && lit) {
+        const box = drawCaptionInside(n, r, base, 1);
         // The circle itself is reserved, not just the text: a relationship type
         // printed across a node reads as that node's label.
         reserved.push(box ?? screenBox(n.x, n.y, r * 1.9, r * 1.9));

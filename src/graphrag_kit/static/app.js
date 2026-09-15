@@ -739,6 +739,9 @@ async function askQuestion() {
   syncInsets();
   $('answer-body').innerHTML = '';
   $('answer-context').innerHTML = '';
+  // The note describes the standing view ("Sensor: 3 direct connections"), which
+  // is not what is on screen once an unfold starts.
+  setNote(null);
   resetProgress();
   let step = 0;
   markProgress(step);

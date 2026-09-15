@@ -109,6 +109,12 @@ matched, the records extracted from them, then the neighbourhood the graph
 contributes on top. Roughly: rings by 2 seconds, answer by 14 with
 `hybrid-cypher`, 45 with the agent.
 
+Each ring is capped so the whole unfold lands just under the explorer's caption
+ceiling — about thirty nodes — which is what lets an answer's evidence be drawn
+the same way as the type overview: every circle named, every relationship typed.
+The labels say what was cut ("16 of 107 records extracted from them"), and the
+answer itself carries the detail the picture leaves out.
+
 **Extend the graph** in the rail takes a `.md` or `.pdf` file, runs the same
 pipeline, schema and extraction rules that built the corpus, and lights up what
 the new document added and what it connected to.
