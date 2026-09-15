@@ -76,11 +76,13 @@ def main() -> int:
                     f"ON (n.{spec.evidence_property})",
                 )
             )
+        # The *preferred* name property, not the fallback: that is the one every
+        # citation, document list and source lookup reads.
         statements.append(
             (
                 "source_name",
-                f"CREATE INDEX source_name IF NOT EXISTS FOR (d:{lex.source_label}) "
-                f"ON (d.{lex.source_name_properties[-1]})",
+                f"CREATE INDEX source_name IF NOT EXISTS FOR (d:`{lex.source_label}`) "
+                f"ON (d.`{lex.source_name_properties[0]}`)",
             )
         )
         for name, statement in statements:
