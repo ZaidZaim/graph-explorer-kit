@@ -80,11 +80,17 @@ graphrag-agent --show-tools "Which agencies investigated the most events?"
 
 Three views over the one graph:
 
-* **Graph** — the records themselves. Filter by POLE group (click a group
-  heading) or by individual label. Records with no relationship at all are
-  hidden by default and counted in the rail: there are 367 of them, the residue
-  of extraction finding a place name in a scanned table with nothing to attach
-  it to.
+* **Graph** — **types first.** One node per record type, sized by how many
+  records carry it, with each edge weighted by the relationships it stands for
+  (`MENTIONS ×349`). A thousand records drawn at once is a disc of overlapping
+  dots; rolled up by type it is a dozen nodes and the shape of the corpus is
+  obvious — Document mentions everything, Observation hangs off Event, Witness
+  hangs off Observation. Click a type to open its most connected records and
+  what they link to, which is where the sighting chain becomes visible as
+  clusters. `All records` draws every one of them for the scale of it. Records
+  with no relationship at all are hidden by default and counted in the rail:
+  there are ~365, the residue of extraction finding a place name in a scanned
+  table with nothing to attach it to.
 * **Schema** — the POLE model, one node per type, sized by how many records
   carry it, with the patterns the schema licenses as edges. Click a type for its
   properties and their meanings. This is the view for explaining the model.

@@ -48,6 +48,15 @@ const FAN_SPREAD = Math.PI * 0.86;  // total angle the whole tree occupies
 const RING_RADIUS = 190;    // nominal distance between depth rings
 const RING_GAP = 150;       // minimum gap between consecutive rings
 const NODE_ARC = 88;        // arc length each node needs, so labels do not collide
+// Labels are drawn only where they can be read. Every node labelled at once is
+// the single worst thing a dense graph view does to itself: a thousand names at
+// four pixels of separation is a grey texture that hides the structure it is
+// annotating. So a label needs either a sparse graph, or enough zoom that the
+// node is genuinely big on screen — and whatever is under the pointer or
+// selected is always named, so nothing is ever unidentifiable.
+const LABEL_ALWAYS_BELOW = 40;   // nodes; below this, label everything
+const LABEL_MIN_ON_SCREEN = 11;  // px radius a node needs before it gets a label
+
 // A crowded ring is laid out as two interleaved rows rather than one enormous
 // circle: it halves the radius the ring needs, which is the difference between
 // a readable fan and a distant smudge.
@@ -103,6 +112,7 @@ function createCanvasRenderer(container, opts) {
   // Unfold state. `revealed` null means "showing the whole graph".
   let revealed = null;        // Set<id>
   let stageOf = new Map();    // id -> the stage that introduced it
+  let hovered = null;         // node under the pointer, always labelled
 
   const view = { scale: 0.9, x: 0, y: 0 };
   const camera = { scale: 0.9, x: 0, y: 0, active: false };
@@ -395,13 +405,20 @@ function createCanvasRenderer(container, opts) {
   // arrive; a floor on the extent keeps the opening shot steady.
   const MIN_EXTENT = 620;
 
-  function easeCameraTo(subset, pad = 70) {
+  function easeCameraTo(subset, pad = null) {
     const target = subset?.length ? subset : nodes;
     if (!target.length) return;
     const xs = target.map((n) => n.tx ?? n.x), ys = target.map((n) => n.ty ?? n.y);
     const minX = Math.min(...xs), maxX = Math.max(...xs);
     const minY = Math.min(...ys), maxY = Math.max(...ys);
     const { w, h } = size();
+
+    // Margin scaled to the viewport rather than a flat 70px. On a laptop-sized
+    // stage — or a projector — a fixed margin on all four sides is a quarter of
+    // the width spent on nothing, which squeezes the graph into the middle and
+    // makes its labels collide. It still has to clear a node's label, which
+    // hangs below the node, hence the floor.
+    if (pad === null) pad = Math.max(26, Math.min(70, 0.055 * Math.min(w, h)));
 
     // Usable area is the viewport minus whatever panels currently cover it.
     const availW = Math.max(200, w - insets.left - insets.right - pad * 2);
@@ -628,6 +645,7 @@ function createCanvasRenderer(container, opts) {
     }
 
     // nodes
+    const deferredLabels = [];
     for (const n of nodes) {
       const appear = n.appear ?? 1;
       if (appear <= 0.02) continue;
@@ -674,24 +692,79 @@ function createCanvasRenderer(container, opts) {
       // the passages and their entities carry the answer, the outer ring is
       // context you go looking for.
       const needed = revealed ? [0, 0, 0.42, 0.7][Math.min(n.depth ?? 3, 3)] : 0;
+      const readable =
+        nodes.length <= LABEL_ALWAYS_BELOW || r * view.scale >= LABEL_MIN_ON_SCREEN;
+      const named = n.id === hovered || n.id === selected;
       const showLabel = lit
-        ? appear > 0.5 && view.scale > needed
+        ? (named || (appear > 0.5 && view.scale > needed && readable))
         : !revealed && view.scale > 1.2;
-      if (showLabel) {
-        ctx.globalAlpha = lit ? appear : 0.4;
-        ctx.font = '10.5px "IBM Plex Mono", ui-monospace, monospace';
-        ctx.textAlign = 'center';
-        ctx.textBaseline = 'top';
-        const label = n.name.length > 26 ? n.name.slice(0, 25) + '…' : n.name;
-        ctx.lineWidth = 3;
-        ctx.strokeStyle = STAGE_BG;
-        ctx.strokeText(label, n.x, n.y + r + 5);
-        ctx.fillStyle = '#D9E2EC';
-        ctx.fillText(label, n.x, n.y + r + 5);
-        ctx.globalAlpha = 1;
-      }
+      // Labels are all held back to a second pass: they need to land on top of
+      // every node, and they need to know about each other.
+      if (showLabel) deferredLabels.push({ n, r, alpha: lit ? appear : 0.4, named });
     }
+
+    drawLabels(deferredLabels);
     ctx.restore();
+  }
+
+  /** Draw as many labels as fit without overlapping each other.
+   *
+   *  Gating on zoom stops a thousand labels being drawn at once, but it cannot
+   *  stop the dozen that *are* drawn from landing on top of one another —
+   *  neighbouring nodes are neighbouring precisely because they are close. So
+   *  labels are placed greedily, biggest node first, and one that would collide
+   *  with a label already placed is dropped. The set thins out as things get
+   *  tight instead of turning into overstruck mush, and whatever is under the
+   *  pointer is placed first, so it is never the one dropped.
+   */
+  function drawLabels(candidates) {
+    if (!candidates.length) return;
+    // Hovered and selected first, then the most connected, then the biggest.
+    candidates.sort((a, b) =>
+      (b.named - a.named) ||
+      ((b.n.degree ?? 0) - (a.n.degree ?? 0)) ||
+      (b.r - a.r));
+    const placed = [];
+    const gap = 2;
+    for (const item of candidates) {
+      const { n, r, alpha, named } = item;
+      ctx.font = `${(named ? 11.5 : 10.5) / view.scale}px "IBM Plex Mono", ui-monospace, monospace`;
+      const text = n.name.length > 34 ? n.name.slice(0, 33) + '…' : n.name;
+      // Screen space, because that is where the collisions happen: the world
+      // gap between two nodes shrinks with the zoom, the text does not.
+      const w = ctx.measureText(text).width * view.scale + gap * 2;
+      const h = 13 + gap * 2;
+      const x = n.x * view.scale + view.x - w / 2;
+      const y = (n.y + r) * view.scale + view.y + 4;
+      const clash = placed.some(
+        (p) => x < p.x + p.w && x + w > p.x && y < p.y + p.h && y + h > p.y);
+      if (clash && !named) continue;
+      placed.push({ x, y, w, h });
+      drawLabel(n, r, alpha, named);
+    }
+  }
+
+  /** One node label, stroked in the stage colour so it survives over an edge.
+   *
+   *  Sized in *screen* pixels, not world units: the canvas is drawn inside a
+   *  scaled transform, so a plain `10.5px` font shrinks with the zoom and a
+   *  graph fitted to the stage ends up annotated in illegible four-pixel type.
+   *  Dividing by the scale holds the text at one size however far out you are,
+   *  which is also why it is worth gating on how big the *node* looks. */
+  function drawLabel(n, r, alpha, emphasise = false) {
+    const px = (v) => v / view.scale;
+    ctx.globalAlpha = alpha;
+    ctx.font = `${px(emphasise ? 11.5 : 10.5)}px "IBM Plex Mono", ui-monospace, monospace`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const label = n.name.length > 34 ? n.name.slice(0, 33) + '…' : n.name;
+    const y = n.y + r + px(5);
+    ctx.lineWidth = px(3.5);
+    ctx.strokeStyle = STAGE_BG;
+    ctx.strokeText(label, n.x, y);
+    ctx.fillStyle = emphasise ? '#ffffff' : '#D9E2EC';
+    ctx.fillText(label, n.x, y);
+    ctx.globalAlpha = 1;
   }
 
   /* ---- interaction ---- */
@@ -714,7 +787,9 @@ function createCanvasRenderer(container, opts) {
     if (!last) {
       const rect = canvas.getBoundingClientRect();
       const p = toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
-      canvas.style.cursor = pick(p.x, p.y) ? 'pointer' : 'grab';
+      const over = pick(p.x, p.y);
+      hovered = over ? over.id : null;
+      canvas.style.cursor = over ? 'pointer' : 'grab';
       return;
     }
     const dx = ev.clientX - last.x, dy = ev.clientY - last.y;
@@ -741,6 +816,8 @@ function createCanvasRenderer(container, opts) {
     canvas.style.cursor = 'grab';
     canvas.releasePointerCapture(ev.pointerId);
   });
+
+  canvas.addEventListener('pointerleave', () => { hovered = null; });
 
   canvas.addEventListener('wheel', (ev) => {
     ev.preventDefault();
@@ -786,6 +863,16 @@ function createCanvasRenderer(container, opts) {
       // Defaults first: re-adopting mid-unfold must not reset an edge that has
       // already drawn itself in.
       .map((r) => ({ grow: 0, revealed: false, animStart: 0, ...r }));
+
+    // Degree, for deciding which labels are worth the room when they compete.
+    // The most connected node is the one a viewer orients by — in the type
+    // overview it is Document, which every other type hangs off, and which is
+    // also one of the smallest circles on screen.
+    for (const n of nodes) n.degree = 0;
+    for (const e of edges) {
+      byId.get(e.from).degree++;
+      byId.get(e.to).degree++;
+    }
     alpha = keepPositions ? 0.5 : 1;
   }
 

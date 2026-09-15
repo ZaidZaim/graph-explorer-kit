@@ -372,6 +372,69 @@ def schema() -> dict:
     }
 
 
+@app.get("/api/overview")
+def overview(labels: str | None = None) -> dict:
+    """The graph aggregated by type: one node per label, one edge per pattern.
+
+    This is the default view, and the reason is legibility. A thousand records
+    drawn at once is a disc of overlapping dots — every label is true, none is
+    readable, and the structure that makes it a graph is invisible. Rolled up by
+    type it is a dozen nodes and the shape of the corpus is obvious at a glance:
+    Document mentions everything, Observation hangs off Event, Witness hangs off
+    Observation. The instances are one click away.
+
+    Unlike /api/schema this counts what is actually in the graph, so the edges
+    carry weights and a pattern the schema allows but the corpus never uses does
+    not appear at all.
+    """
+    project = spec()
+    wanted = [x for x in (labels or "").split(",") if x] or project.labels
+    counts = label_counts()
+    records = run(
+        f"""
+        MATCH (a:__Entity__)-[r]->(b:__Entity__)
+        WITH {label_expr('a')} AS from_label, type(r) AS rel_type,
+             {label_expr('b')} AS to_label, count(*) AS weight
+        WHERE from_label IN $labels AND to_label IN $labels
+        RETURN from_label, rel_type, to_label, weight
+        ORDER BY weight DESC
+        """,
+        labels=wanted,
+    )
+    nodes = [
+        {
+            "id": label,
+            "label": label,
+            "group": project.group_of(label),
+            "name": f"{label} ({counts.get(label, 0)})",
+            "count": counts.get(label, 0),
+            "status": None,
+            "evidence_levels": [],
+            "description": None,
+            "properties": {},
+            "aggregate": True,
+        }
+        for label in wanted
+        if counts.get(label)
+    ]
+    return {
+        "nodes": nodes,
+        "relationships": [
+            {
+                "id": f"{r['from_label']}-{r['rel_type']}-{r['to_label']}",
+                "from": r["from_label"],
+                "to": r["to_label"],
+                # The weight rides on the edge label: an aggregate edge that does
+                # not say how many relationships it stands for is a lie of
+                # omission — MENTIONS ×349 and SAME_AS ×1 would look identical.
+                "type": f"{r['rel_type']} ×{r['weight']}",
+                "properties": {"count": r["weight"], "relationship": r["rel_type"]},
+            }
+            for r in records
+        ],
+    }
+
+
 @app.get("/api/graph")
 def graph(
     labels: str | None = None,
@@ -409,6 +472,48 @@ def graph(
     return {
         "nodes": nodes,
         "relationships": relationships_among([n["id"] for n in nodes]),
+    }
+
+
+#: Instances drawn when drilling into one type. Each one brings its neighbours,
+#: so thirty Observations arrive as something closer to a hundred nodes — which
+#: is about where a force layout stops being a picture and starts being a blob.
+#: The true total goes back with them, so the view never implies it is showing
+#: everything.
+INSTANCE_LIMIT = 30
+
+
+@app.get("/api/instances")
+def instances(label: str, limit: int = INSTANCE_LIMIT) -> dict:
+    """Records of one type, with their neighbours — the drill-down from the
+    aggregate overview.
+
+    Ordered by connectedness, because that is what makes a legible picture: the
+    records that tie the most others together carry the structure, and a random
+    hundred Observations tell you nothing about how Observations sit in the graph.
+    """
+    project = spec()
+    if label not in project.labels:
+        raise HTTPException(400, f"unknown label {label!r}")
+    total = run(
+        f"MATCH (n:`{label}`:__Entity__) RETURN count(n) AS c",
+    )[0]["c"]
+    seeds = run(
+        f"""
+        MATCH (n:`{label}`:__Entity__)
+        WITH n, count {{ (n)-[]-(:__Entity__) }} AS degree
+        ORDER BY degree DESC, n.name
+        LIMIT $limit
+        RETURN elementId(n) AS id
+        """,
+        limit=max(1, min(limit, 400)),
+    )
+    subgraph = subgraph_for_ids([r["id"] for r in seeds], include_neighbours=True)
+    return {
+        **subgraph,
+        "label": label,
+        "shown": len(seeds),
+        "total": total,
     }
 
 

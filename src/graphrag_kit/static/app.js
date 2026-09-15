@@ -38,8 +38,16 @@ const STAGE_RING = { evidence: 1, entities: 2, neighbourhood: 3 };
  *  and simply fills them as it goes. */
 const PROGRESS_STEPS = 4;
 
+/** Node radius from a count, for the views that draw one node per type. Area,
+ *  not radius, tracks the count — a linear radius makes 261 Observations look
+ *  thirty times more important than 1 Redaction rather than sixteen, and swamps
+ *  the small types entirely. */
+const typeRadius = (count, max) => 11 + 26 * Math.sqrt(count / Math.max(max, 1));
+
 const CAPTIONS = {
-  graph: 'Every extracted record and the links between them. Click a node for its provenance.',
+  graph: 'One node per record type, sized by how many records carry it. Click a type to open its records.',
+  graphAll: 'Every extracted record. Zoom in for names, or hover a node.',
+  graphType: 'The most connected records of one type, with what they link to. Reset view goes back.',
   schema: 'The POLE model this corpus is held to. Node size is how many records carry that type.',
   timeline: 'Events carrying a date, earliest first. Dates are as precise as the document allowed.',
 };
@@ -49,6 +57,10 @@ const state = {
   graph: { nodes: [], relationships: [] },
   schema: null,
   view: 'graph',
+  // 'overview' draws one node per type, 'all' draws every record, and 'type'
+  // is the drill-down from overview into one type's records.
+  graphMode: 'overview',
+  drilledInto: null,
   activeLabels: new Set(),
   activeStatuses: new Set(),
   // Entities with no relationship at all. A third of this corpus, and as a
@@ -95,7 +107,6 @@ async function boot() {
     // Dev affordance: inspect layout state from the console.
     window.__graphrag = { state, renderer: state.renderer };
     await refreshGraph();
-    setCaption(CAPTIONS.graph);
     setLoading(null);
   } catch (err) {
     console.error(err);
@@ -323,6 +334,7 @@ async function setView(view) {
     tab.classList.toggle('is-active', tab.dataset.view === view);
   }
   $('pole-panel').hidden = view !== 'graph';
+  if (view === 'graph') syncModeUi();
   hideDetails();
   closeAnswer();
   setCaption(CAPTIONS[view]);
@@ -343,14 +355,61 @@ async function refreshGraph() {
     $('graph-empty').hidden = false;
     return;
   }
-  state.graph = await api(
-    `/api/graph?labels=${encodeURIComponent(labels)}&status=${encodeURIComponent(status)}` +
-    `&connected=${state.showIsolated ? 'false' : 'true'}`);
+
+  if (state.graphMode === 'overview') {
+    const data = await api(`/api/overview?labels=${encodeURIComponent(labels)}`);
+    const max = Math.max(1, ...data.nodes.map((n) => n.count));
+    state.graph = {
+      nodes: data.nodes.map((n) => ({ ...n, radius: typeRadius(n.count, max) })),
+      relationships: data.relationships,
+    };
+    setNote('Click a type to open its records');
+  } else if (state.graphMode === 'type' && state.drilledInto) {
+    const data = await api(`/api/instances?label=${encodeURIComponent(state.drilledInto)}`);
+    state.graph = { nodes: data.nodes, relationships: data.relationships };
+    setNote(data.shown < data.total
+      ? `${state.drilledInto}: ${data.shown} of ${data.total} records, most connected first`
+      : `${state.drilledInto}: all ${data.total} records`);
+  } else {
+    state.graph = await api(
+      `/api/graph?labels=${encodeURIComponent(labels)}&status=${encodeURIComponent(status)}` +
+      `&connected=${state.showIsolated ? 'false' : 'true'}`);
+    setNote(state.showIsolated || !state.meta.isolated
+      ? null
+      : `${state.meta.isolated} unlinked records hidden`);
+  }
+
   $('graph-empty').hidden = state.graph.nodes.length > 0;
   state.renderer.setGraph(state.graph);
-  setNote(state.showIsolated || !state.meta.isolated
-    ? null
-    : `${state.meta.isolated} unlinked records hidden`);
+  setCaption(CAPTIONS[
+    { overview: 'graph', type: 'graphType', all: 'graphAll' }[state.graphMode]]);
+  syncModeUi();
+}
+
+function syncModeUi() {
+  // Unlinked records are only a thing the records view can show or hide; in the
+  // overview they are already counted inside their type.
+  $('structure-filters').hidden = state.graphMode !== 'all';
+  for (const b of document.querySelectorAll('#graph-mode button')) {
+    // The drill-down is a state of the overview, so the Types button stays lit.
+    const active = b.dataset.mode === (state.graphMode === 'all' ? 'all' : 'overview');
+    b.classList.toggle('is-active', active);
+  }
+}
+
+async function setGraphMode(mode) {
+  state.graphMode = mode;
+  state.drilledInto = null;
+  if (state.view !== 'graph') { await setView('graph'); return; }
+  await refreshGraph();
+}
+
+/** Open one type's records from the overview. */
+async function drillInto(label) {
+  state.graphMode = 'type';
+  state.drilledInto = label;
+  hideDetails();
+  await refreshGraph();
 }
 
 /** The schema as a graph: one node per type, sized by how many records carry it,
@@ -360,10 +419,7 @@ async function showSchema() {
   const max = Math.max(1, ...state.schema.nodes.map((n) => n.count));
   const nodes = state.schema.nodes.map((n) => ({
     ...n,
-    // Area, not radius, tracks the count — a linear radius makes Observation
-    // (261) look thirty times more important than Redaction (1) rather than
-    // sixteen, and swamps the small types entirely.
-    radius: 11 + 26 * Math.sqrt(n.count / max),
+    radius: typeRadius(n.count, max),
     name: `${n.label} (${n.count})`,
   }));
   state.graph = { nodes, relationships: state.schema.relationships };
@@ -405,6 +461,9 @@ function shortDate(value) {
 
 async function showDetails(nodeId) {
   if (state.view === 'schema') return showSchemaDetails(nodeId);
+  // In the overview a node *is* a type, so clicking it opens the type rather
+  // than describing a record that does not exist.
+  if (state.view === 'graph' && state.graphMode === 'overview') return drillInto(nodeId);
 
   const node = state.graph.nodes.find((n) => n.id === nodeId)
     ?? state.unfoldNodes.get(nodeId)
@@ -878,8 +937,13 @@ function wireEvents() {
   $('reset-view').addEventListener('click', async () => {
     closeAnswer();
     state.newIds = new Set();
+    state.graphMode = 'overview';
+    state.drilledInto = null;
     await setView('graph');
   });
+  for (const b of document.querySelectorAll('#graph-mode button')) {
+    b.addEventListener('click', () => setGraphMode(b.dataset.mode));
+  }
   for (const tab of document.querySelectorAll('.view-tab')) {
     tab.addEventListener('click', () => setView(tab.dataset.view));
   }

@@ -212,7 +212,7 @@ Three views over the one graph, switched in the masthead:
 
 | View | What it shows |
 |---|---|
-| **Graph** | The records themselves, filtered by group or label. |
+| **Graph** | Types by default — one node per label, sized by how many records carry it, with edges weighted by how many relationships they stand for. Click a type to open its most connected records and what they link to; `All records` draws every one of them. |
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
@@ -230,6 +230,13 @@ Three views over the one graph, switched in the masthead:
   from the live graph. Entities with no relationship at all are excluded by
   default and offered as their own toggle: on a large extracted corpus they can
   be a third of the nodes and they bury the structure worth looking at.
+- **Labels appear where they can be read.** A thousand names at four pixels of
+  separation is a grey texture that hides the structure it annotates, so a label
+  needs either a sparse graph or enough zoom that its node is genuinely big on
+  screen; the remaining labels are placed greedily, most-connected first, and one
+  that would collide with a label already placed is dropped rather than
+  overstruck. Whatever is under the pointer or selected is always named, so
+  nothing is ever unidentifiable.
 - **Click a node** for every property the extractor recorded and every
   connection, each one clickable. Properties are passed through wholesale rather
   than picked from a fixed list, because in most corpora the domain properties
@@ -265,6 +272,8 @@ also the shortest path to putting your own front-end on the graph:
 |---|---|
 | `GET /api/meta` | Project title, labels, POLE groups, palette, live counts, evidence levels if the corpus has any. |
 | `GET /api/schema` | The project's schema **as a graph** — one node per type with its properties and live count, one edge per pattern. The model itself, queryable. |
+| `GET /api/overview?labels=` | The graph rolled up by type: one node per label, one weighted edge per (label, type, label) actually present. Unlike `/api/schema` this counts the data, so a pattern the schema allows but the corpus never uses does not appear. |
+| `GET /api/instances?label=&limit=` | The drill-down: that type's most connected records plus their neighbours, with the true total alongside. |
 | `GET /api/graph?labels=&status=&connected=` | The entity graph, comma-separated filters. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
 | `GET /api/expand?id=` | One node plus its direct neighbours and the edges among them. |
 | `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. Terms are Lucene-escaped, so a half-typed query is a search rather than a 500. |

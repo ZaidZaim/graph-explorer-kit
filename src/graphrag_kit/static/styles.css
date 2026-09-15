@@ -181,6 +181,17 @@ input:focus, select:focus, #drop-zone:focus-visible {
 .results li:hover { background: rgba(110, 231, 255, 0.10); color: var(--prose); }
 .results .r-label { font-size: 8.5px; color: var(--dim); text-transform: uppercase; }
 
+/* ---------- segmented control ---------- */
+
+.segmented { display: flex; margin: 0 0 12px; border: 1px solid var(--rule); border-radius: var(--radius); overflow: hidden; }
+.segmented button {
+  flex: 1; border: 0; border-radius: 0; background: none; color: var(--dim);
+  font-size: 9px; padding: 6px 4px; letter-spacing: 0.12em;
+}
+.segmented button + button { border-left: 1px solid var(--rule); }
+.segmented button:hover { color: var(--text); background: rgba(110, 231, 255, 0.05); }
+.segmented button.is-active { color: var(--cyan); background: rgba(110, 231, 255, 0.12); }
+
 /* ---------- POLE filters ---------- */
 
 .pole { display: flex; flex-direction: column; gap: 3px; }
@@ -323,7 +334,9 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
   font-size: 9.5px; color: var(--dim); max-width: 260px; line-height: 1.75;
   letter-spacing: 0.1em; text-align: right;
 }
-.stage-note { top: auto; bottom: 100px; color: var(--cyan-deep); }
+/* Stacked under the caption rather than at the bottom of the stage, where the
+   example chips wrap into it. */
+.stage-note { top: 74px; color: var(--cyan); opacity: .75; }
 
 #structure-filters { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--rule-soft); }
 #structure-filters li { color: var(--muted); }
