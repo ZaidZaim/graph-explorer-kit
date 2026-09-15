@@ -145,6 +145,14 @@ function createCanvasRenderer(container, opts) {
   let revealed = null;        // Set<id>
   let stageOf = new Map();    // id -> the stage that introduced it
   let hovered = null;         // node under the pointer, always labelled
+  // The ids the standing view asked for, remembered at setGraph. Anything in
+  // `nodes` beyond this was merged in by an unfold or an ingest, belongs to that
+  // one event, and goes back out when it ends. Without the record they
+  // accumulate for the rest of the session: every answer used to leave its two
+  // dozen entities behind, so a seventeen-node type overview became fifty-seven
+  // nodes with arrows between them — and dropped out of caption mode, which
+  // showed up as the labels moving outside the circles.
+  let baseIds = new Set();
 
   const view = { scale: 0.9, x: 0, y: 0 };
   const camera = { scale: 0.9, x: 0, y: 0, active: false };
@@ -576,10 +584,11 @@ function createCanvasRenderer(container, opts) {
   function collapse() {
     revealed = null;
     stageOf = new Map();
-    // Retrieved passages are not part of the standing graph — they belong to one
-    // answer, and go with it.
+    // Back to exactly what the standing view asked for. Everything else was
+    // merged in by the unfold — the retrieved passages, which were never graph
+    // records at all, and the entities and neighbours it added on top.
     const transient = new Set(
-      nodes.filter((n) => n.label === 'Chunk').map((n) => n.id));
+      nodes.filter((n) => !baseIds.has(n.id)).map((n) => n.id));
     if (transient.size) {
       nodes = nodes.filter((n) => !transient.has(n.id));
       byId = new Map(nodes.map((n) => [n.id, n]));
@@ -1145,6 +1154,7 @@ function createCanvasRenderer(container, opts) {
     kind: 'canvas',
     setGraph(graph) {
       revealed = null; selected = null; stageOf = new Map();
+      baseIds = new Set(graph.nodes.map((n) => n.id));
       adopt(graph, false);
       for (const delay of [500, 1300, 2500]) setTimeout(() => easeCameraTo(nodes), delay);
     },
