@@ -82,7 +82,11 @@ def fact_expr(subject: str, rel: str, obj: str, spec: ProjectSpec) -> str:
 #: Lucene operators that make a half-typed search term a syntax error rather
 #: than a search. The explorer searches on every keystroke and the agent passes
 #: entity names straight through, so an unescaped ":" or "(" must not be a 500.
-LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/]|&&|\|\|)')
+#:
+#: One character at a time, deliberately. Matching the two-character operators
+#: `&&` and `||` as units and prefixing one backslash escapes only their first
+#: character and leaves the second bare.
+LUCENE_SPECIAL = re.compile(r'([+\-!(){}\[\]^"~*?:\\/&|])')
 
 
 def lucene_escape(term: str) -> str:

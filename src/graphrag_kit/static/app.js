@@ -200,7 +200,14 @@ function setNote(text) {
 function buildPoleFilters() {
   const box = $('pole-groups');
   box.innerHTML = '';
-  const { groups, groupColors, colors, counts } = state.meta;
+  const { groupColors, colors, counts } = state.meta;
+  // A project need not declare groups. Without a fallback the whole filter list
+  // would simply be absent for one that does not, since there would be no group
+  // to hang the labels off — so the labels become one unnamed group.
+  const grouped = Object.keys(state.meta.groups ?? {}).length > 0;
+  const groups = grouped ? state.meta.groups : { '': state.meta.labels };
+  $('pole-panel').querySelector('h2').firstChild.textContent =
+    grouped ? 'POLE ' : 'Entities ';
 
   for (const [group, labels] of Object.entries(groups)) {
     const total = labels.reduce((sum, l) => sum + (counts[l] ?? 0), 0);
@@ -211,6 +218,7 @@ function buildPoleFilters() {
     const head = document.createElement('div');
     head.className = 'pole-head';
     head.innerHTML = `<span>${group}</span><span class="count">${total}</span>`;
+    head.hidden = !group;
     // Clicking a group toggles all of its labels at once: the group *is* the
     // POLE class, and "show me only the people" is the question being asked.
     head.onclick = () => {
@@ -253,7 +261,7 @@ function syncFilterUi() {
   for (const li of document.querySelectorAll('.pole-labels li')) {
     li.classList.toggle('is-off', !state.activeLabels.has(li.dataset.label));
   }
-  for (const [group, labels] of Object.entries(state.meta.groups)) {
+  for (const [group, labels] of Object.entries(state.meta.groups ?? {})) {
     const div = [...document.querySelectorAll('.pole-group')].find(
       (d) => d.querySelector('.pole-head span').textContent === group);
     div?.classList.toggle('is-off', !labels.some((l) => state.activeLabels.has(l)));

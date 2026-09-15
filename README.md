@@ -230,6 +230,12 @@ Three views over the one graph, switched in the masthead:
   from the live graph. Entities with no relationship at all are excluded by
   default and offered as their own toggle: on a large extracted corpus they can
   be a third of the nodes and they bury the structure worth looking at.
+- **Nodes and edges scale to the size of the graph.** A thousand records drawn
+  at the radius that suits thirty is a mass of overlapping discs with no gaps
+  for the edges to show through, and eight hundred edges at the weight that
+  suits eighty sum to a white blob in the middle. Both shrink as the graph
+  grows, and the centre gravity weakens with it, so components separate instead
+  of packing into a ball.
 - **Labels appear where they can be read.** A thousand names at four pixels of
   separation is a grey texture that hides the structure it annotates, so a label
   needs either a sparse graph or enough zoom that its node is genuinely big on

@@ -62,7 +62,16 @@ const LABEL_MIN_ON_SCREEN = 11;  // px radius a node needs before it gets a labe
 // a readable fan and a distant smudge.
 const CROWDED = 14;         // nodes on a ring before it splits into two rows
 const ROW_STAGGER = 46;     // radial offset between the two rows
-const MIN_NODE_PX = 6;      // never let a node shrink below this on screen
+const MIN_NODE_PX = 6;      // never let an *unfolded* node shrink below this
+
+// Node size follows the size of the graph. A thousand records drawn at the
+// radius that suits thirty is a solid mass of overlapping discs with no gaps
+// for the edges to show through — which is the whole picture, since the edges
+// are what make it a graph. Small graphs keep the full radius; a corpus-sized
+// one becomes dots.
+const NODE_RADIUS = 12;     // the radius a comfortable graph uses
+const COMFORTABLE = 70;     // nodes; at or below this, full size
+const DOT_MIN = 0.28;       // floor on the shrink factor
 
 const EDGE_BOW = 0.10;      // how far an edge bows away from a straight chord
 
@@ -204,9 +213,14 @@ function createCanvasRenderer(container, opts) {
       a.vx += (dx / d) * f; a.vy += (dy / d) * f;
       b.vx -= (dx / d) * f; b.vy -= (dy / d) * f;
     }
+    // Centre gravity, weaker the bigger the graph. It exists to stop
+    // disconnected components drifting apart for ever, but at full strength on
+    // a thousand nodes it packs every component into one ball and hides the
+    // cluster structure that makes the picture worth looking at.
+    const pull = nodes.length > 200 ? 0.004 : 0.012;
     for (const n of free) {
-      n.vx -= n.x * 0.012;
-      n.vy -= n.y * 0.012;
+      n.vx -= n.x * pull;
+      n.vy -= n.y * pull;
       n.vx *= 0.86; n.vy *= 0.86;
       n.x += Math.max(-30, Math.min(30, n.vx)) * alpha;
       n.y += Math.max(-30, Math.min(30, n.vy)) * alpha;
@@ -580,15 +594,31 @@ function createCanvasRenderer(container, opts) {
 
   const isChunk = (n) => n.label === 'Chunk';
 
-  const baseRadius = (n) =>
-    n.radius ?? (n.id === selected ? 17 : isChunk(n) ? 15 : 12);
+  /** Shrink factor for the current graph size, 1 for anything comfortable. */
+  function nodeScale() {
+    const n = Math.max(nodes.length, 1);
+    return Math.max(DOT_MIN, Math.min(1, Math.sqrt(COMFORTABLE / n)));
+  }
+
+  const baseRadius = (n) => {
+    // An explicit radius means the view is encoding something in the size — the
+    // record count, in the type views — so it is scaled but never overridden.
+    const nominal = n.radius ?? (n.id === selected ? 17 : isChunk(n) ? 15 : NODE_RADIUS);
+    return nominal * nodeScale();
+  };
   /** Grown by `appear` on the way in, and floored so a wide fan zoomed out to
    *  fit is still made of visible dots rather than dust. */
   const radius = (n) => {
     // The screen-size floor is for the unfold only: applying it to the ghosted
     // graph turns a faint backdrop into a field of grey dots competing with it.
     const ghost = revealed && !revealed.has(n.id);
-    const base = ghost ? baseRadius(n) : Math.max(baseRadius(n), MIN_NODE_PX / view.scale);
+    // The screen-size floor is for the unfold only. Applied to the standing
+    // graph it undoes the shrink above: at half zoom it forces every node back
+    // to twelve world units, and a thousand of those is the packed disc this
+    // was meant to avoid.
+    const base = revealed && !ghost
+      ? Math.max(baseRadius(n), MIN_NODE_PX / view.scale)
+      : baseRadius(n);
     return base * (0.35 + 0.65 * Math.max(n.appear ?? 1, 0));
   };
 
@@ -610,11 +640,16 @@ function createCanvasRenderer(container, opts) {
       // An edge out of a passage is the retrieval's own work rather than a fact
       // the graph already held, so it reads warmer than the rest.
       const flow = lit && (isChunk(a) || isChunk(b));
-      ctx.lineWidth = (flow ? 1.8 : lit ? 1.5 : 1) / view.scale;
+      // Edges thin and fade as the graph grows. Eight hundred of them at the
+      // weight that suits eighty overlap into a solid white mass in the middle,
+      // which reads as one bright blob rather than as connections — the nodes
+      // disappear behind their own edges.
+      const dense = nodes.length > 200;
+      ctx.lineWidth = (flow ? 1.8 : lit ? (dense ? 0.85 : 1.5) : 1) / view.scale;
       ctx.strokeStyle = flow
         ? `rgba(110,231,255,${0.18 + 0.38 * g})`
         : lit
-        ? `rgba(255,255,255,${0.10 + 0.20 * g})`
+        ? `rgba(196,214,236,${(dense ? 0.05 + 0.08 * g : 0.10 + 0.20 * g)})`
         : `rgba(255,255,255,${0.05 * g})`;
       strokeCurve(a, b, g);
 
@@ -674,7 +709,8 @@ function createCanvasRenderer(container, opts) {
       }
       ctx.fillStyle = lit ? base : GHOST_FILL;
       ctx.fill();
-      ctx.lineWidth = 2.5 / view.scale;
+      // A 2.5px ring on a 4px dot is mostly ring. Keep it proportional.
+      ctx.lineWidth = Math.min(2.5, r * 0.34) / view.scale;
       // The ring carries the evidence level where the corpus grades one. Where
       // it does not, a single grey ring on every node is noise pretending to be
       // information, so the node's own colour is deepened instead.
