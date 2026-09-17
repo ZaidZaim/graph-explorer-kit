@@ -1,0 +1,175 @@
+/* Vice City — the explorer in the idiom of rockstargames.com/VI.
+
+   Loaded after the engine's styles.css, so everything here is an override of
+   its tokens plus a few rules for the pieces tokens cannot reach (the title
+   gradient, the pill buttons, the sunset behind the masthead). The canvas
+   reads the same tokens, so the graph follows.
+
+   The idiom, read off the site: a near-black navy ground; a sunset that runs
+   gold to coral to plum to indigo; lavender text; pale-pink pill buttons with
+   dark type; uppercase Art Deco display lettering with wide tracking. Josefin
+   Sans is the closest open face to that lettering, and Lato stays for prose.
+   Per-entity node colours still come from the project's palette. */
+
+@import url("https://fonts.googleapis.com/css2?family=Josefin+Sans:wght@300;400;600;700&family=JetBrains+Mono:wght@400;500&display=swap");
+
+:root {
+  --bg:         #0C0D1B;
+  --bg-2:       #11101F;
+  --mast-top:   #07080F;
+  --panel:      rgba(17, 16, 31, 0.86);
+  --panel-solid:#11101F;
+  --rule:       rgba(255, 178, 198, 0.16);
+  --rule-soft:  rgba(217, 209, 246, 0.09);
+  --well:       rgba(0, 0, 0, 0.38);
+  --well-soft:  rgba(0, 0, 0, 0.24);
+  --well-faint: rgba(217, 209, 246, 0.02);
+  --text:       #D9D1F6;
+  --prose:      #FDFBFF;
+  --muted:      #A897C4;
+  --dim:        #6F6490;
+  --placeholder:#4E4568;
+  /* The accent token is named for the engine's default; here it is the pink. */
+  --cyan:       #FF7EB6;
+  --cyan-rgb:   255, 126, 182;
+  --cyan-deep:  #7A2E58;
+  --confirmed:  #2BD9C4;
+  --reported:   #FFC857;
+  --rumored:    #FF5A6E;
+  --scanline:   transparent;
+  --overlay:    rgba(12, 13, 27, 0.86);
+  --pill-text:  #0C0D1B;
+  --shadow:     rgba(0, 0, 0, 0.65);
+  --ink-rgb:    206, 196, 236;
+  --ghost-fill: #1C1830;
+  --label-text: #D9D1F6;
+  --label-emph: #FFFFFF;
+  --radius:     10px;
+  --mono:       "Josefin Sans", "Segoe UI", system-ui, sans-serif;
+  --sans:       "Lato", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* The sunset, used behind the masthead and in the title. */
+  --sun-gold:   #FFD687;
+  --sun-coral:  #FC5243;
+  --sun-plum:   #9D2F6A;
+  --sun-indigo: #201F42;
+}
+
+:root[data-theme="light"] {
+  --bg:         #FBF7FA;
+  --bg-2:       #F4ECF3;
+  --mast-top:   #FFFFFF;
+  --panel:      rgba(255, 255, 255, 0.88);
+  --panel-solid:#FFFFFF;
+  --rule:       rgba(157, 47, 106, 0.22);
+  --rule-soft:  rgba(48, 25, 88, 0.10);
+  --well:       rgba(48, 25, 88, 0.05);
+  --well-soft:  rgba(48, 25, 88, 0.035);
+  --well-faint: rgba(48, 25, 88, 0.02);
+  --text:       #2A2140;
+  --prose:      #16102A;
+  --muted:      #5D5378;
+  --dim:        #8A80A4;
+  --placeholder:#A99FBF;
+  --cyan:       #C2185B;
+  --cyan-rgb:   194, 24, 91;
+  --cyan-deep:  #F2B8CF;
+  --confirmed:  #0F9D8A;
+  --reported:   #B7791F;
+  --rumored:    #C42847;
+  --overlay:    rgba(251, 247, 250, 0.88);
+  --pill-text:  #FFFFFF;
+  --shadow:     rgba(48, 25, 88, 0.18);
+  --ink-rgb:    74, 60, 104;
+  --ghost-fill: #E4DCEA;
+  --label-text: #2A2140;
+  --label-emph: #000000;
+}
+
+/* Josefin Sans sits low on its line; nudge the tracked chrome so it reads as
+   the site's display lettering rather than as small caps. */
+.chrome-label, .panel h2, .panel h3, #details h3, .hint, .field > span,
+#hud dt, .view-tab, .pill, .evidence, .group-line, #context-details summary,
+#sources-details summary, .stage-caption, .stage-line, .progress-steps li,
+.dock-head h2, .answer h2, .theme-toggle {
+  letter-spacing: 0.18em; font-weight: 400;
+}
+
+/* Numbers and code want a real monospace. */
+#hud dd, .props dd, #answer-body code, #answer-context pre, .log-date {
+  font-family: "JetBrains Mono", ui-monospace, Consolas, monospace;
+}
+
+/* ---------- masthead: the sunset ---------- */
+
+#masthead {
+  background:
+    radial-gradient(120% 220% at 50% -110%,
+      rgba(255, 214, 135, 0.55) 0%,
+      rgba(252, 82, 67, 0.42) 32%,
+      rgba(157, 47, 106, 0.34) 58%,
+      rgba(32, 31, 66, 0.0) 100%),
+    linear-gradient(180deg, var(--mast-top) 0%, var(--bg) 100%);
+  border-bottom-color: rgba(255, 178, 198, 0.22);
+}
+:root[data-theme="light"] #masthead {
+  background:
+    radial-gradient(120% 220% at 50% -110%,
+      rgba(255, 214, 135, 0.75) 0%,
+      rgba(252, 82, 67, 0.35) 32%,
+      rgba(157, 47, 106, 0.22) 58%,
+      rgba(255, 255, 255, 0) 100%),
+    linear-gradient(180deg, var(--mast-top) 0%, var(--bg) 100%);
+}
+
+/* The title in the site's lettering, filled with the sunset. */
+.ident h1 {
+  font-family: "Josefin Sans", "Segoe UI", sans-serif;
+  font-weight: 700; font-size: 17px; letter-spacing: 0.42em;
+  padding-top: 3px;
+  background: linear-gradient(92deg, var(--sun-gold) 0%, var(--sun-coral) 45%, var(--cyan) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.ident p { color: var(--muted); letter-spacing: 0.16em; }
+
+/* A sun, not a seal. */
+.seal {
+  border: 0; opacity: 1;
+  background: radial-gradient(circle at 50% 35%, var(--sun-gold) 0%, var(--sun-coral) 55%, var(--sun-plum) 100%);
+  box-shadow: 0 0 18px rgba(252, 82, 67, 0.45);
+}
+.seal::after { display: none; }
+
+.view-tab.is-active { border-radius: 999px; border-color: transparent; background: rgba(var(--cyan-rgb), 0.12); }
+.view-tab.is-active::after { display: none; }
+.hud-clock dd { color: var(--sun-gold); }
+
+/* ---------- pills, the site's one button shape ---------- */
+
+button, .examples button, .segmented button, .view-tab { border-radius: 999px; }
+.segmented { border-radius: 999px; overflow: hidden; }
+.segmented button { border-radius: 0; }
+
+#ask-button {
+  background: #FFB2C6; border-color: #FFB2C6; color: #0C0D1B;
+  font-weight: 700; letter-spacing: 0.2em;
+}
+#ask-button:hover { background: #FFC9D8; border-color: #FFC9D8; }
+:root[data-theme="light"] #ask-button { background: var(--cyan); border-color: var(--cyan); color: #fff; }
+
+.examples button { border-radius: 999px; padding-left: 14px; padding-right: 14px; }
+.examples button:hover { color: var(--sun-gold); border-color: rgba(255, 214, 135, 0.45); }
+
+input[type="search"], input[type="text"], select, #ask-form input { border-radius: 999px; padding-left: 16px; }
+.answer, #details, .results { border-radius: var(--radius); }
+
+/* Evidence pills read as the site's tag chips. */
+.pill { border-radius: 999px; padding: 4px 11px; }
+
+/* The stage keeps a faint sunset low on the horizon, the way the site's hero
+   fades from the sky into the ground. Under 6% so an edge always wins. */
+#graph-area::after {
+  content: ''; position: absolute; inset: auto 0 0 0; height: 40%; z-index: 1;
+  pointer-events: none;
+  background: linear-gradient(180deg, rgba(157, 47, 106, 0) 0%, rgba(157, 47, 106, 0.06) 100%);
+}

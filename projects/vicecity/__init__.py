@@ -77,4 +77,7 @@ PROJECT = ProjectSpec(
         "Event": "#9B7BFF",
         "Organization": "#5AA9FF",
     },
+    # The explorer in the idiom of rockstargames.com/VI: sunset masthead,
+    # lavender type, pink pill buttons. See theme.css for what it overrides.
+    theme_css=Path(__file__).resolve().parent / "theme.css",
 )
