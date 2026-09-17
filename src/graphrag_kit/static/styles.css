@@ -1,26 +1,46 @@
-/* Dark-only by design — this is a presentation surface, not a document, and the
-   graph canvas reads badly on light ground.
+/* Two palettes, one set of tokens. The dark one is the idiom the source
+   material is published in: near-black ground, ultra-light uppercase monospace
+   for every piece of chrome, cyan for anything live or selected, and metadata
+   in the left gutter rather than in a heading. The light one keeps the same
+   structure on a paper ground, with the accent deepened to a teal that still
+   reads as "live" against white. Per-entity node colours come from the
+   project's POLE palette, not from here.
 
-   The idiom is the one the source material is published in: near-black ground,
-   ultra-light uppercase monospace for every piece of chrome, cyan for anything
-   live or selected, and metadata in the left gutter rather than in a heading.
-   Per-entity node colours come from the project's POLE palette, not from here. */
+   The graph canvas reads the same tokens (see renderer.js), so a theme switch
+   repaints the whole surface, not just the chrome. `--cyan-rgb` and
+   `--ink-rgb` exist because rgba() washes need the channels bare. */
 :root {
+  color-scheme: dark;
   --bg:         #020616;
   --bg-2:       #050b1c;
+  --mast-top:   #000000;
   --panel:      rgba(8, 16, 33, 0.82);
   --panel-solid:#070e1f;
   --rule:       rgba(110, 231, 255, 0.14);
   --rule-soft:  rgba(255, 255, 255, 0.07);
+  --well:       rgba(0, 0, 0, 0.45);
+  --well-soft:  rgba(0, 0, 0, 0.27);
+  --well-faint: rgba(255, 255, 255, 0.015);
   --text:       #D9E2EC;
   --prose:      #ffffff;
   --muted:      #8494A8;
   --dim:        #5C6B80;
+  --placeholder:#44536b;
   --cyan:       #6EE7FF;
+  --cyan-rgb:   110, 231, 255;
   --cyan-deep:  #1D4E5C;
   --confirmed:  #4ADE80;
   --reported:   #FFB454;
   --rumored:    #FF5A6E;
+  --scanline:   rgba(110, 231, 255, 0.028);
+  --overlay:    rgba(2, 6, 22, 0.86);
+  --pill-text:  #02060f;
+  --shadow:     rgba(0, 0, 0, 0.6);
+  /* Canvas: relationship ink, ghosted nodes, and the label text over the stage. */
+  --ink-rgb:    196, 214, 236;
+  --ghost-fill: #111a2b;
+  --label-text: #D9E2EC;
+  --label-emph: #ffffff;
   --radius:     3px;
   --mono:       "IBM Plex Mono", ui-monospace, SFMono-Regular, Consolas, monospace;
   --sans:       "Lato", "Segoe UI", system-ui, -apple-system, sans-serif;
@@ -29,6 +49,45 @@
   --detail: 340px;
   --mast: 62px;
 }
+
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg:         #F4F7FB;
+  --bg-2:       #EAF0F7;
+  --mast-top:   #ffffff;
+  --panel:      rgba(255, 255, 255, 0.86);
+  --panel-solid:#ffffff;
+  --rule:       rgba(11, 122, 153, 0.24);
+  --rule-soft:  rgba(6, 20, 40, 0.09);
+  --well:       rgba(6, 20, 40, 0.05);
+  --well-soft:  rgba(6, 20, 40, 0.035);
+  --well-faint: rgba(6, 20, 40, 0.02);
+  --text:       #1E2A3A;
+  --prose:      #0B1220;
+  --muted:      #4B5A6E;
+  --dim:        #7A889C;
+  --placeholder:#9AA7B8;
+  --cyan:       #0B7A99;
+  --cyan-rgb:   11, 122, 153;
+  --cyan-deep:  #A9D9E6;
+  --confirmed:  #15803D;
+  --reported:   #B45309;
+  --rumored:    #BE123C;
+  --scanline:   rgba(11, 122, 153, 0.03);
+  --overlay:    rgba(244, 247, 251, 0.88);
+  --pill-text:  #ffffff;
+  --shadow:     rgba(15, 25, 45, 0.18);
+  --ink-rgb:    52, 68, 92;
+  --ghost-fill: #D3DBE6;
+  --label-text: #1E2A3A;
+  --label-emph: #000000;
+}
+
+/* The POLE swatches are tuned for a dark ground. As text and hairlines on
+   paper they need deepening; as node fills on the canvas they are fine. */
+:root[data-theme="light"] .pole-group,
+:root[data-theme="light"] .pole-labels .dot,
+:root[data-theme="light"] .filters .dot { filter: brightness(0.72) saturate(1.35); }
 
 * { box-sizing: border-box; }
 
@@ -73,7 +132,7 @@ html, body {
   grid-area: mast;
   display: flex; align-items: center; gap: 18px;
   padding: 0 20px;
-  background: linear-gradient(180deg, #000 0%, var(--bg) 100%);
+  background: linear-gradient(180deg, var(--mast-top) 0%, var(--bg) 100%);
   border-bottom: 1px solid var(--rule);
 }
 
@@ -110,13 +169,39 @@ html, body {
 .view-tab.is-active {
   color: var(--cyan);
   border-color: var(--rule);
-  background: rgba(110, 231, 255, 0.06);
+  background: rgba(var(--cyan-rgb), 0.06);
 }
 /* The active view gets the site's cyan tick under it. */
 .view-tab.is-active::after {
   content: ''; display: block; height: 1px; margin-top: 6px;
   background: var(--cyan);
 }
+
+/* ---------- theme switch ---------- */
+
+.theme-toggle {
+  display: flex; align-items: center; gap: 8px; margin-left: 14px;
+  background: none; border: 0; padding: 4px 0; border-radius: 0; cursor: pointer;
+  color: var(--dim); font-family: var(--mono); font-size: 8.5px; font-weight: 300;
+  text-transform: uppercase; letter-spacing: 0.14em; flex: none;
+}
+.theme-toggle:hover { background: none; color: var(--text); }
+.theme-toggle:focus-visible { outline: 1px solid var(--cyan); outline-offset: 3px; }
+.theme-toggle-track {
+  position: relative; width: 30px; height: 14px; border-radius: 7px;
+  border: 1px solid var(--rule); background: var(--well);
+  transition: background .2s ease;
+}
+.theme-toggle-knob {
+  position: absolute; top: 2px; left: 2px; width: 8px; height: 8px;
+  border-radius: 50%; background: var(--cyan);
+  transition: left .2s ease;
+}
+.theme-toggle[aria-checked="true"] .theme-toggle-knob { left: 18px; }
+.theme-toggle[aria-checked="true"] .theme-toggle-track { background: rgba(var(--cyan-rgb), 0.16); }
+/* The side that is live carries the accent, the way the active view tab does. */
+.theme-toggle[aria-checked="false"] .theme-toggle-label[data-for="dark"],
+.theme-toggle[aria-checked="true"] .theme-toggle-label[data-for="light"] { color: var(--cyan); }
 
 #hud { display: flex; gap: 22px; margin: 0 0 0 auto; align-items: baseline; }
 #hud > div { display: flex; flex-direction: column; gap: 2px; text-align: right; }
@@ -155,15 +240,15 @@ html, body {
 }
 input[type="search"], input[type="text"], select {
   width: 100%; padding: 9px 10px;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--well);
   border: 1px solid var(--rule); border-radius: var(--radius);
   color: var(--text); font-family: var(--mono); font-size: 12px;
   font-weight: 300; letter-spacing: 0.04em;
 }
-input::placeholder { color: #44536b; }
+input::placeholder { color: var(--placeholder); }
 input:focus, select:focus, #drop-zone:focus-visible {
   outline: none; border-color: var(--cyan);
-  box-shadow: 0 0 0 1px rgba(110, 231, 255, 0.3);
+  box-shadow: 0 0 0 1px rgba(var(--cyan-rgb), 0.3);
 }
 
 .results {
@@ -178,7 +263,7 @@ input:focus, select:focus, #drop-zone:focus-visible {
   letter-spacing: 0.02em;
 }
 .results li:last-child { border-bottom: 0; }
-.results li:hover { background: rgba(110, 231, 255, 0.10); color: var(--prose); }
+.results li:hover { background: rgba(var(--cyan-rgb), 0.10); color: var(--prose); }
 .results .r-label { font-size: 8.5px; color: var(--dim); text-transform: uppercase; }
 
 /* ---------- segmented control ---------- */
@@ -189,8 +274,8 @@ input:focus, select:focus, #drop-zone:focus-visible {
   font-size: 9px; padding: 6px 4px; letter-spacing: 0.12em;
 }
 .segmented button + button { border-left: 1px solid var(--rule); }
-.segmented button:hover { color: var(--text); background: rgba(110, 231, 255, 0.05); }
-.segmented button.is-active { color: var(--cyan); background: rgba(110, 231, 255, 0.12); }
+.segmented button:hover { color: var(--text); background: rgba(var(--cyan-rgb), 0.05); }
+.segmented button.is-active { color: var(--cyan); background: rgba(var(--cyan-rgb), 0.12); }
 
 /* ---------- POLE filters ---------- */
 
@@ -271,10 +356,10 @@ details summary:hover { color: var(--text); }
   display: flex; flex-direction: column; gap: 3px; align-items: center;
   padding: 16px 12px; cursor: pointer; text-align: center;
   border: 1px dashed var(--cyan-deep); border-radius: var(--radius);
-  background: rgba(110, 231, 255, 0.03);
+  background: rgba(var(--cyan-rgb), 0.03);
 }
 #drop-zone:hover, #drop-zone.is-dragover {
-  border-color: var(--cyan); background: rgba(110, 231, 255, 0.08);
+  border-color: var(--cyan); background: rgba(var(--cyan-rgb), 0.08);
 }
 #drop-zone strong {
   font-size: 10px; font-weight: 400; color: var(--cyan);
@@ -304,9 +389,9 @@ button {
   font-family: var(--mono); font-size: 11px; cursor: pointer;
   border-radius: var(--radius); border: 1px solid var(--cyan);
   padding: 9px 16px; letter-spacing: 0.14em; text-transform: uppercase;
-  background: rgba(110, 231, 255, 0.10); color: var(--cyan); font-weight: 400;
+  background: rgba(var(--cyan-rgb), 0.10); color: var(--cyan); font-weight: 400;
 }
-button:hover { background: rgba(110, 231, 255, 0.2); }
+button:hover { background: rgba(var(--cyan-rgb), 0.2); }
 button:disabled { opacity: .45; cursor: progress; }
 button.ghost {
   background: none; border-color: var(--rule); color: var(--muted); flex: 1;
@@ -332,7 +417,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 .scanlines {
   position: absolute; inset: 0; z-index: 1; pointer-events: none;
   background: repeating-linear-gradient(
-    180deg, rgba(110, 231, 255, 0.028) 0 1px, transparent 1px 4px);
+    180deg, var(--scanline) 0 1px, transparent 1px 4px);
 }
 
 /* Top-right of the stage: the one corner no panel claims. At the bottom it sat
@@ -354,12 +439,12 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 .overlay {
   position: absolute; inset: 0; z-index: 5;
   display: flex; flex-direction: column; align-items: center; justify-content: center;
-  gap: 14px; background: rgba(2, 6, 22, 0.86); color: var(--muted);
+  gap: 14px; background: var(--overlay); color: var(--muted);
   font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.16em;
 }
 .spinner {
   width: 26px; height: 26px; border-radius: 50%;
-  border: 1px solid rgba(110, 231, 255, 0.18); border-top-color: var(--cyan);
+  border: 1px solid rgba(var(--cyan-rgb), 0.18); border-top-color: var(--cyan);
   animation: spin .9s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
@@ -376,7 +461,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 #ask-form { display: flex; gap: 7px; }
 #ask-form input {
   flex: 1;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--well);
   border: 1px solid var(--rule);
   padding: 11px 14px; font-size: 12.5px; letter-spacing: 0.05em;
 }
@@ -386,7 +471,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 
 .examples { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
 .examples button {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--well-soft);
   border-color: var(--rule-soft); color: var(--dim);
   font-size: 9.5px; padding: 4px 10px; letter-spacing: 0.08em;
   text-transform: none;
@@ -402,7 +487,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
      a pixel the graph above loses. At 34vh an open answer left a laptop-height
      stage with 237px of graph. */
   max-height: clamp(150px, 24vh, 240px); overflow-y: auto;
-  background: rgba(0, 0, 0, 0.28);
+  background: var(--well-soft);
   border: 1px solid var(--rule); border-radius: var(--radius);
   padding: 12px 16px;
 }
@@ -467,7 +552,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 #answer-body a:hover { border-bottom-color: var(--cyan); }
 #answer-body code {
   font-family: var(--mono); font-size: 11px;
-  background: rgba(0, 0, 0, 0.45); padding: 1px 4px; border-radius: 2px;
+  background: var(--well); padding: 1px 4px; border-radius: 2px;
 }
 
 /* The timeline view renders into the answer card: a release log, not prose. */
@@ -476,7 +561,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
   display: grid; grid-template-columns: 96px 1fr; gap: 10px;
   padding: 5px 0; border-bottom: 1px solid var(--rule-soft); cursor: pointer;
 }
-#answer-body.log .log-row:hover { background: rgba(110, 231, 255, 0.07); }
+#answer-body.log .log-row:hover { background: rgba(var(--cyan-rgb), 0.07); }
 #answer-body.log .log-date { color: var(--cyan); font-variant-numeric: tabular-nums; }
 #answer-body.log .log-name { color: var(--text); }
 
@@ -485,7 +570,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 #answer-context pre {
   margin: 0; padding: 8px 9px; font-family: var(--mono); font-size: 9.5px;
   line-height: 1.55; white-space: pre-wrap; word-break: break-word;
-  background: rgba(0, 0, 0, 0.45); border-left: 1px solid var(--cyan-deep);
+  background: var(--well); border-left: 1px solid var(--cyan-deep);
   color: var(--muted); max-height: 190px; overflow-y: auto;
 }
 
@@ -512,7 +597,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 }
 .pill {
   display: inline-block; padding: 3px 9px; border-radius: 2px;
-  font-size: 9px; font-weight: 400; color: #02060f; background: var(--muted);
+  font-size: 9px; font-weight: 400; color: var(--pill-text); background: var(--muted);
 }
 .group-line { margin: 10px 0 0; font-size: 8.5px; color: var(--dim); }
 .evidence { margin: 6px 0 0; font-size: 9.5px; }
@@ -538,16 +623,16 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 .rels { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 1px; }
 .rels li {
   font-size: 11px; padding: 7px 8px; cursor: pointer; line-height: 1.5;
-  border-left: 2px solid var(--rule-soft); background: rgba(255, 255, 255, 0.015);
+  border-left: 2px solid var(--rule-soft); background: var(--well-faint);
 }
-.rels li:hover { background: rgba(110, 231, 255, 0.09); border-left-color: var(--cyan); }
+.rels li:hover { background: rgba(var(--cyan-rgb), 0.09); border-left-color: var(--cyan); }
 .rels .rel-type {
   font-size: 8.5px; color: var(--cyan); letter-spacing: 0.12em;
   display: block; margin-bottom: 2px;
 }
 .rels .dir { color: var(--dim); font-size: 9px; text-transform: uppercase; letter-spacing: 0.08em; }
 .rels li.inert { cursor: default; color: var(--dim); }
-.rels li.inert:hover { background: rgba(255, 255, 255, 0.015); border-left-color: var(--rule-soft); }
+.rels li.inert:hover { background: var(--well-faint); border-left-color: var(--rule-soft); }
 
 /* ---------- responsive ---------- */
 
@@ -561,7 +646,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
   }
   #details {
     position: fixed; top: var(--mast); right: 0; bottom: 0; width: var(--detail);
-    z-index: 9; box-shadow: -18px 0 44px rgba(0, 0, 0, 0.6);
+    z-index: 9; box-shadow: -18px 0 44px var(--shadow);
   }
   #hud > div:not(.hud-clock) { display: none; }
 }

@@ -16,7 +16,7 @@
  * back to a built-in canvas renderer so the demo still works.
  */
 
-import { createRenderer } from '/static/renderer.js?v=4';
+import { createRenderer } from '/static/renderer.js?v=5';
 
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
@@ -26,6 +26,40 @@ const api = async (path, opts) => {
 };
 
 const CHUNK_COLOR = '#41506B';
+
+/* ---------------- theme ---------------- */
+
+const THEME_KEY = 'graphrag-theme';
+
+/** The theme the page is showing. index.html sets it before first paint from
+ *  the stored choice or the OS preference, so this is never undefined. */
+const currentTheme = () => (document.documentElement.dataset.theme === 'light' ? 'light' : 'dark');
+
+/** Switch the whole surface: the CSS tokens flip on `data-theme`, and the
+ *  canvas re-reads them. `persist` is false when following the OS rather
+ *  than the reader's own click, so a later OS change is still honoured. */
+function applyTheme(theme, { persist = true } = {}) {
+  document.documentElement.dataset.theme = theme;
+  const toggle = $('theme-toggle');
+  toggle.setAttribute('aria-checked', String(theme === 'light'));
+  toggle.setAttribute('aria-label', theme === 'light' ? 'Switch to dark mode' : 'Switch to light mode');
+  if (persist) {
+    try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage blocked */ }
+  }
+  state.renderer?.setTheme?.();
+}
+
+function wireTheme() {
+  applyTheme(currentTheme(), { persist: false });
+  $('theme-toggle').addEventListener('click', () =>
+    applyTheme(currentTheme() === 'light' ? 'dark' : 'light'));
+  // Follow the OS only while the reader has not chosen for themselves.
+  matchMedia('(prefers-color-scheme: light)').addEventListener('change', (e) => {
+    let stored = null;
+    try { stored = localStorage.getItem(THEME_KEY); } catch { /* storage blocked */ }
+    if (!stored) applyTheme(e.matches ? 'light' : 'dark', { persist: false });
+  });
+}
 
 /** Which ring each backend stage lands on. The order is the pipeline's own: the
  *  passages the question matched, the entities in them, and the neighbourhood
@@ -81,6 +115,7 @@ const state = {
 /* ---------------- boot ---------------- */
 
 async function boot() {
+  wireTheme();
   try {
     setLoading('Reading graph metadata…');
     state.meta = await api('/api/meta');

@@ -4,10 +4,21 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Knowledge Graph Explorer</title>
+<!-- Theme before paint, so a light-mode reader never sees a dark flash. The
+     preference is the reader's own choice if they have made one, else the OS. -->
+<script>
+  try {
+    var stored = localStorage.getItem('graphrag-theme');
+    var theme = stored === 'light' || stored === 'dark'
+      ? stored
+      : (matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
+    document.documentElement.dataset.theme = theme;
+  } catch (e) { /* storage blocked: stay dark */ }
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400;500&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=4" />
+<link rel="stylesheet" href="/static/styles.css?v=5" />
 </head>
 <body>
 <div id="app">
@@ -25,6 +36,13 @@
       <button type="button" class="view-tab" data-view="schema">Schema</button>
       <button type="button" class="view-tab" data-view="timeline">Timeline</button>
     </nav>
+
+    <button type="button" id="theme-toggle" class="theme-toggle" role="switch"
+            aria-checked="false" aria-label="Switch to light mode">
+      <span class="theme-toggle-label" data-for="dark">Dark</span>
+      <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-knob"></span></span>
+      <span class="theme-toggle-label" data-for="light">Light</span>
+    </button>
 
     <dl id="hud" aria-label="Corpus readout">
       <div><dt>Records</dt><dd id="hud-records">—</dd></div>
@@ -156,6 +174,6 @@
   </aside>
 
 </div>
-<script type="module" src="/static/app.js?v=4"></script>
+<script type="module" src="/static/app.js?v=5"></script>
 </body>
 </html>

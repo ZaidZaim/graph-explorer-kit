@@ -27,13 +27,36 @@ const NVL_INTERACTIONS_URL = 'https://esm.sh/@neo4j-nvl/interaction-handlers@1.2
 
 const STATUS_RING = { confirmed: '#4ADE80', reported: '#FFB454', rumored: '#FF5A6E' };
 
-// Ground colour of the stage. Node labels are stroked in it so they stay
-// readable over an edge, and ghosted nodes fade towards it.
-const STAGE_BG = '#020616';
-const GHOST_FILL = '#111a2b';
-const ACCENT = '#6EE7FF';
+// The stage's colours come from the same CSS tokens the chrome uses, so a
+// theme switch repaints the canvas too. `bg` is the ground: node labels are
+// stroked in it so they stay readable over an edge, and ghosted nodes fade
+// towards it. `ink` is the relationship colour, bare channels for rgba().
+const theme = {
+  bg: '#020616',
+  ghost: '#111a2b',
+  accent: '#6EE7FF',
+  accentRgb: '110,231,255',
+  inkRgb: '196,214,236',
+  label: '#D9E2EC',
+  labelEmph: '#ffffff',
+};
 
-const CHUNK_RING = 'rgba(110,231,255,0.55)';
+/** Re-read the theme tokens from the document. Called once at start and again
+ *  by the app whenever `data-theme` changes; the frame loop paints the new
+ *  values on its next pass. */
+function readTheme() {
+  const css = getComputedStyle(document.documentElement);
+  const token = (name, fallback) => css.getPropertyValue(name).trim() || fallback;
+  theme.bg = token('--bg', theme.bg);
+  theme.ghost = token('--ghost-fill', theme.ghost);
+  theme.accent = token('--cyan', theme.accent);
+  theme.accentRgb = token('--cyan-rgb', theme.accentRgb).replace(/\s+/g, '');
+  theme.inkRgb = token('--ink-rgb', theme.inkRgb).replace(/\s+/g, '');
+  theme.label = token('--label-text', theme.label);
+  theme.labelEmph = token('--label-emph', theme.labelEmph);
+}
+const accent = (alpha) => `rgba(${theme.accentRgb},${alpha})`;
+const ink = (alpha) => `rgba(${theme.inkRgb},${alpha})`;
 
 // Unfold timing, milliseconds.
 const NODE_FADE = 520;      // how long a node takes to arrive
@@ -115,6 +138,7 @@ export async function createRenderer(container, opts) {
    ======================================================================= */
 
 function createCanvasRenderer(container, opts) {
+  readTheme();
   const canvas = document.createElement('canvas');
   canvas.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;display:block;cursor:grab';
   container.appendChild(canvas);
@@ -635,17 +659,17 @@ function createCanvasRenderer(container, opts) {
       if (span.length <= 0) continue;
       ctx.lineWidth = (flow ? 1.8 : lit ? (dense ? 0.85 : 1.5) : 1) / view.scale;
       ctx.strokeStyle = flow
-        ? `rgba(110,231,255,${0.22 + 0.4 * g})`
+        ? accent(0.22 + 0.4 * g)
         : lit
-        ? `rgba(196,214,236,${(dense ? 0.05 + 0.08 * g : 0.16 + 0.26 * g)})`
-        : `rgba(255,255,255,${0.05 * g})`;
+        ? ink(dense ? 0.05 + 0.08 * g : 0.16 + 0.26 * g)
+        : ink(0.06 * g);
       strokeEdge(span, g);
 
       // Arrowhead on the target's rim, the way Browser draws direction.
       if (lit && g > 0.98 && (captioned() || view.scale > 0.5)) {
         const size = captioned() ? 9 : 7;
         const tx = span.x1, ty = span.y1;
-        ctx.fillStyle = flow ? 'rgba(110,231,255,0.8)' : 'rgba(196,214,236,0.6)';
+        ctx.fillStyle = flow ? accent(0.8) : ink(0.6);
         ctx.beginPath();
         ctx.moveTo(tx, ty);
         ctx.lineTo(tx - (span.ux * 0.92 - span.uy * 0.39) * size,
@@ -688,9 +712,7 @@ function createCanvasRenderer(container, opts) {
       if (lit && (n.id === selected || n.isSeed)) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, r + 11, 0, Math.PI * 2);
-        ctx.fillStyle = n.id === selected
-          ? 'rgba(110,231,255,0.24)'
-          : `rgba(110,231,255,${0.14 * appear})`;
+        ctx.fillStyle = n.id === selected ? accent(0.24) : accent(0.14 * appear);
         ctx.fill();
       }
 
@@ -704,7 +726,7 @@ function createCanvasRenderer(container, opts) {
         ctx.beginPath();
         ctx.arc(n.x, n.y, r, 0, Math.PI * 2);
       }
-      ctx.fillStyle = lit ? base : GHOST_FILL;
+      ctx.fillStyle = lit ? base : theme.ghost;
       ctx.fill();
       // A 2.5px ring on a 4px dot is mostly ring. Keep it proportional.
       ctx.lineWidth = Math.min(2.5, r * 0.34) / view.scale;
@@ -712,8 +734,8 @@ function createCanvasRenderer(container, opts) {
       // it does not, a single grey ring on every node is noise pretending to be
       // information, so the node's own colour is deepened instead.
       ctx.strokeStyle = lit
-        ? (isChunk(n) ? CHUNK_RING : STATUS_RING[n.status] ?? shade(base))
-        : 'rgba(255,255,255,0.10)';
+        ? (isChunk(n) ? accent(0.55) : STATUS_RING[n.status] ?? shade(base))
+        : ink(0.12);
       ctx.stroke();
       ctx.globalAlpha = 1;
 
@@ -798,9 +820,9 @@ function createCanvasRenderer(container, opts) {
       ctx.rotate(item.angle);
       // Stroked in the stage colour so the line does not run through the word.
       ctx.lineWidth = px(4);
-      ctx.strokeStyle = STAGE_BG;
+      ctx.strokeStyle = theme.bg;
       ctx.strokeText(item.text, 0, 0);
-      ctx.fillStyle = item.flow ? 'rgba(110,231,255,0.92)' : 'rgba(170,190,214,0.95)';
+      ctx.fillStyle = item.flow ? accent(0.92) : ink(0.95);
       ctx.fillText(item.text, 0, 0);
       ctx.restore();
     }
@@ -935,9 +957,9 @@ function createCanvasRenderer(container, opts) {
     const label = n.name.length > 34 ? n.name.slice(0, 33) + '…' : n.name;
     const y = n.y + r + px(5);
     ctx.lineWidth = px(3.5);
-    ctx.strokeStyle = STAGE_BG;
+    ctx.strokeStyle = theme.bg;
     ctx.strokeText(label, n.x, y);
-    ctx.fillStyle = emphasise ? '#ffffff' : '#D9E2EC';
+    ctx.fillStyle = emphasise ? theme.labelEmph : theme.label;
     ctx.fillText(label, n.x, y);
     ctx.globalAlpha = 1;
   }
@@ -1104,6 +1126,7 @@ function createCanvasRenderer(container, opts) {
     },
     collapse,
     setInsets(next) { insets = { left: 0, top: 0, right: 0, bottom: 0, ...next }; },
+    setTheme: readTheme,
     debug: () => ({
       revealed: revealed ? revealed.size : null,
       nodes: nodes.length,
@@ -1159,6 +1182,7 @@ function createCanvasRenderer(container, opts) {
    ======================================================================= */
 
 async function createNvlRenderer(container, opts) {
+  readTheme();
   const timeout = new Promise((_, reject) =>
     setTimeout(() => reject(new Error('NVL import timed out')), 8000));
   const [{ NVL }, interactions] = await Promise.race([
@@ -1170,7 +1194,7 @@ async function createNvlRenderer(container, opts) {
     layout: 'forceDirected',
     initialZoom: 0.75,
     renderer: 'canvas',
-    backgroundColor: '#120b1e',
+    backgroundColor: theme.bg,
   });
 
   // Guard the exact surface this adapter drives: NVL is pinned but loaded from a
@@ -1201,9 +1225,9 @@ async function createNvlRenderer(container, opts) {
       id: n.id,
       captions: [{ value: n.name }],
       caption: n.name,
-      color: dim ? GHOST_FILL : (opts.colors[n.label] ?? '#8a8a8a'),
+      color: dim ? theme.ghost : (opts.colors[n.label] ?? '#8a8a8a'),
       size: n.id === selected ? 34 : 24,
-      borderColor: STATUS_RING[n.status] ?? ACCENT,
+      borderColor: STATUS_RING[n.status] ?? theme.accent,
       borderWidth: 3,
       selected: n.id === selected,
     };
@@ -1211,7 +1235,7 @@ async function createNvlRenderer(container, opts) {
   const toNvlRel = (r) => ({
     id: r.id, from: r.from, to: r.to,
     captions: [{ value: r.type }], caption: r.type,
-    color: 'rgba(255,255,255,0.28)',
+    color: ink(0.35),
   });
 
   const paint = () =>
