@@ -23,6 +23,7 @@ from pathlib import Path
 
 from neo4j_graphrag.components.resolver import SinglePropertyExactMatchResolver
 from neo4j_graphrag.components.text_splitters.fixed_size_splitter import FixedSizeSplitter
+from neo4j_graphrag.components.types import LexicalGraphConfig
 from neo4j_graphrag.experimental.pipeline.kg_builder import SimpleKGPipeline
 
 from graphrag_kit.config import (
@@ -35,7 +36,11 @@ from graphrag_kit.config import (
 )
 from graphrag_kit.project import ProjectSpec, load_project
 
-SUPPORTED_SUFFIXES = {".md", ".txt", ".pdf"}
+#: What `SimpleKGPipeline`'s default file loader can actually read. Not .txt:
+#: the loader dispatches on suffix and raises UnsupportedDocumentFormatError for
+#: anything outside this set, which surfaces as a document that ingests to
+#: nothing rather than as an error about the file type.
+SUPPORTED_SUFFIXES = {".md", ".markdown", ".pdf"}
 
 # Braces in the JSON example are doubled: this string is rendered with str.format(),
 # so single braces would be read as placeholders and raise KeyError.
@@ -118,50 +123,138 @@ def evidence_rollup_query(levels: tuple[str, ...]) -> str:
     """
 
 
+def lexical_graph_config(spec: ProjectSpec) -> LexicalGraphConfig:
+    """Write the lexical layer under the names this graph already uses.
+
+    Without this the pipeline writes its own defaults — `Document` for a source
+    file and `embedding` for a chunk vector — and both are already taken in an
+    adopted graph, by different things:
+
+      * `Document` here is an extracted *entity*, a released record with a title
+        and a classification marking. The writer reserves that label for source
+        files, so an extracted Document is written as a lexical node and never
+        gets `__Entity__` — which makes it invisible to every query the engine
+        runs, since they all filter on that label.
+      * `embedding` holds the other tool's vectors, from a different model,
+        under its own index.
+
+    Configuring the writer is much better than correcting it afterwards: a
+    post-hoc relabelling cannot reliably tell an extracted `Document` entity
+    from a source file, and guessing wrong silently turns records into files.
+    """
+    lex = spec.lexical
+    return LexicalGraphConfig(
+        document_node_label=lex.source_label,
+        chunk_node_label=lex.chunk_label,
+        chunk_to_document_relationship_type=lex.chunk_to_source_write,
+        node_to_chunk_relationship_type=lex.entity_to_chunk_write,
+        chunk_text_property=lex.text_property,
+        chunk_embedding_property=lex.embedding_property,
+    )
+
+
+def build_pipeline(spec: ProjectSpec, driver, llm, embedder, database: str) -> SimpleKGPipeline:
+    return SimpleKGPipeline(
+        llm=llm,
+        driver=driver,
+        embedder=embedder,
+        schema=spec.schema,
+        prompt_template=build_prompt(spec),
+        lexical_graph_config=lexical_graph_config(spec),
+        from_file=True,
+        # 700-token chunks keep an assertion and its qualifying sentence in one
+        # extraction call; the overlap stops entities being cut in half.
+        text_splitter=FixedSizeSplitter(chunk_size=700, chunk_overlap=100, approximate=True),
+        # Resolution runs once at the end instead of per-file: bulk merges are cheaper.
+        perform_entity_resolution=False,
+        on_error="RAISE",
+        neo4j_database=database,
+    )
+
+
+def resolution_filter(spec: ProjectSpec, sources: list[str]) -> str | None:
+    """A WHERE clause confining entity resolution to entities from `sources`.
+
+    Resolution merges every pair of same-label, same-name nodes it is shown, and
+    the merge is not reversible. Run unscoped over a graph built by another tool
+    it will happily merge records that tool kept apart on purpose — two distinct
+    sightings both named "Fireball sighting", say — and the distinction is gone.
+
+    Scoping to the document just ingested keeps the useful case (the same person
+    named twice in one new file) and removes the destructive one. Returns None
+    for a project that owns its whole graph, where global resolution is correct.
+    """
+    if spec.owns_graph:
+        return None
+    lex = spec.lexical
+    quoted = ", ".join(repr(name) for name in sources)
+    return (
+        f"WHERE EXISTS {{ (entity)-[:{lex.entity_to_chunk}]->"
+        f"(:`{lex.chunk_label}`)-[:{lex.chunk_to_source}]->"
+        f"(d:`{lex.source_label}`) WHERE d.`{lex.source_name_properties[0]}` IN [{quoted}] }}"
+    )
+
+
+async def ingest_files(
+    spec: ProjectSpec,
+    paths: list[Path],
+    driver,
+    llm,
+    database: str,
+    resolve_entities: bool = True,
+    report=print,
+) -> dict:
+    """Build the graph from `paths` using a caller-supplied driver and model.
+
+    Split out from `ingest()` so the explorer can ingest an uploaded document on
+    its own connection and stream progress, rather than shelling out to the CLI.
+    `report` receives one human-readable line per stage.
+    """
+    pipeline = build_pipeline(spec, driver, llm, get_embedder(), database)
+
+    for path in paths:
+        report(f"reading {path.name}")
+        report(f"extracting entities from {path.name}")
+        await pipeline.run_async(
+            file_path=str(path),
+            document_metadata={"source": path.name, "project": spec.key},
+        )
+
+    if spec.grades_evidence:
+        records, _, _ = driver.execute_query(
+            evidence_rollup_query(spec.evidence_levels), database_=database
+        )
+        report(f"normalised evidence levels across {records[0]['groups']} entity groups")
+
+    stats = {}
+    if resolve_entities:
+        scope = resolution_filter(spec, [path.name for path in paths])
+        report(
+            "resolving duplicates within the new document"
+            if scope
+            else "resolving duplicate entities"
+        )
+        resolver = SinglePropertyExactMatchResolver(
+            driver,
+            filter_query=scope,
+            resolve_property="name",
+            neo4j_database=database,
+        )
+        resolution = await resolver.run()
+        stats = {
+            "candidates": resolution.number_of_nodes_to_resolve,
+            "after_merge": resolution.number_of_created_nodes,
+        }
+        report(f"{stats['candidates']} candidates -> {stats['after_merge']} nodes after merge")
+    return stats
+
+
 async def ingest(spec: ProjectSpec, paths: list[Path], resolve_entities: bool = True) -> None:
     driver = get_driver()
     database = get_database()
     llm = get_llm()
     try:
-        pipeline = SimpleKGPipeline(
-            llm=llm,
-            driver=driver,
-            embedder=get_embedder(),
-            schema=spec.schema,
-            prompt_template=build_prompt(spec),
-            from_file=True,
-            # 700-token chunks keep an assertion and its qualifying sentence in one
-            # extraction call; the overlap stops entities being cut in half.
-            text_splitter=FixedSizeSplitter(chunk_size=700, chunk_overlap=100, approximate=True),
-            # Resolution runs once at the end instead of per-file: bulk merges are cheaper.
-            perform_entity_resolution=False,
-            on_error="RAISE",
-            neo4j_database=database,
-        )
-
-        for path in paths:
-            print(f"ingesting {path.name} ...", flush=True)
-            await pipeline.run_async(
-                file_path=str(path),
-                document_metadata={"source": path.name, "project": spec.key},
-            )
-
-        records, _, _ = driver.execute_query(
-            evidence_rollup_query(spec.evidence_levels), database_=database
-        )
-        print(f"normalised evidence levels across {records[0]['groups']} entity groups")
-
-        if resolve_entities:
-            print("resolving duplicate entities ...", flush=True)
-            resolver = SinglePropertyExactMatchResolver(
-                driver, resolve_property="name", neo4j_database=database
-            )
-            stats = await resolver.run()
-            print(
-                f"  {stats.number_of_nodes_to_resolve} candidates -> "
-                f"{stats.number_of_created_nodes} nodes after merge"
-            )
-
+        await ingest_files(spec, paths, driver, llm, database, resolve_entities)
         summarise(driver, database)
     finally:
         # aclose(), not close(): we are inside asyncio.run() and the sync close()

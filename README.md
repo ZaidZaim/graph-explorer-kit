@@ -8,6 +8,11 @@ retrieval strategies, an agent that chooses between them, a terminal client, and
 interactive browser explorer that answers questions **and shows you the subgraph
 the answer came from**.
 
+It also reads graphs it did not build. Point the same engine at a graph from
+Neo4j Document Intelligence or another importer, describe how that graph names
+its chunk layer, and you get the retrievers, the agent and the explorer over it
+without rewriting anyone's data — see **Adopting an existing graph**.
+
 ```
 projects/<name>/data/*.md ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_DOCUMENT]->(:Document)
                                                    (:Entity)-[:FROM_CHUNK]->(:Chunk)
@@ -21,6 +26,55 @@ projects/<name>/data/*.md ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_D
                                                       ▼
                                             answer + evidence subgraph
 ```
+
+## Why a graph
+
+Retrieval over embeddings finds the passages that sound like your question.
+That's enough when the answer sits in one paragraph. Most questions worth
+asking a corpus don't work that way: the answer is spread across documents,
+and the connection between them was never written down in any one of them.
+
+"Who runs engineering at the company Kestrel competes with?" needs a fact from
+one briefing (who Kestrel competes with) and a fact from another (who leads
+engineering there). No passage holds both, so no embedding matches the question
+well, and a vector search hands you two half-answers.
+
+A knowledge graph stores the connecting fact explicitly. Extraction turns each
+document into the entities it names and the relationships it asserts between
+them, and the question becomes a walk: Kestrel, `COMPETES_WITH`, Meridian,
+`WORKS_AT` read backwards, Dr. Amara Okonjo. Two hops, one answer, and every
+hop points back at the passage that justified it.
+
+That last part is the ontology's job, and it's why every project here starts
+with a schema rather than a prompt. The schema says which kinds of things exist
+in this domain, which relationships between them are allowed, and which
+properties matter. It holds the extractor to those, so the graph you get is the
+model you meant. And it gives everything downstream something to reason over:
+the agent reads it to write Cypher, the explorer draws it as the Schema view,
+and the extraction rules cite it. Change the domain and the schema changes with
+it. The engine doesn't.
+
+Three things fall out of storing knowledge this way:
+
+- **Multi-hop answers.** Questions that span documents are one traversal
+  instead of a lucky embedding match.
+- **Provenance you can show.** Every entity keeps `FROM_CHUNK` to the passage
+  it came from, and every passage keeps `FROM_DOCUMENT` to its source. The
+  explorer draws that chain as the answer forms, so "where did this come from?"
+  is a picture you can click through.
+- **Structure and text together.** Hybrid retrieval scores passages by
+  embedding and by keyword, then follows the graph out from them. You get the
+  recall of vector search and the precision of a query in one call.
+
+Three projects show the range. `projects/example` is a fictional port-automation
+sector: four entity types, five relationships, and a corpus written so the
+interesting answers cross documents. `projects/vicecity`, on this branch, is
+everything publicly known about Grand Theft Auto VI under a POLE ontology, where
+the point of the graph is keeping marketing, court record, and rumour apart.
+`projects/ufo`, on the `ufo-documents` branch, is the US Department of War's
+released UAP records: 17 types, a graph another tool built, and a corpus whose
+whole difficulty is that it asserts things rather than states them. Each
+project's README explains its own ontology and why it's shaped the way it is.
 
 ## The split
 
@@ -38,8 +92,18 @@ few-shot Cypher, seed questions, and a palette. That is the whole contract — s
 `projects/example`, swap the schema and the corpus, and point the variable at it.
 No engine code changes.
 
+Four optional parts of the spec carry more weight than their size suggests:
+
+| Field | What it buys |
+|---|---|
+| `groups` | A lens over the labels — POLE (Person, Object, Location, Event) in the `ufo-documents` branch, for example. The explorer groups its filters and colours its nodes by it, and serves the model itself as a view, so the model an analyst is taught is the model the picture shows. |
+| `name_properties` | Not every entity has a `name`. A Claim is identified by its text and a Document by its title, and a graph that renders both as "(unnamed)" is useless. |
+| `lexical` | How the chunk/embedding layer is *named*. The defaults are what `neo4j-graphrag` writes itself; overriding them lets the engine read a graph another tool built without rewriting anyone's data. See **Adopting an existing graph**. |
+| `owns_graph` | `False` when the project only reads and extends someone else's graph. It makes the engine cautious in the two places that would otherwise change data it did not write — see **Entity resolution**. |
+
 Branches in this repo follow that split: `main` is the scaffold plus a neutral
-example, and `vice-city` adds a real corpus on top of it.
+example, `vice-city` adds a real corpus on top of it, and `ufo-documents` adopts
+a graph built by Neo4j Document Intelligence and extends it.
 
 > **This is the `vice-city` branch.** It adds
 > [`projects/vicecity`](projects/vicecity/README.md) — a POLE knowledge graph of
@@ -109,11 +173,20 @@ uv sync
 ## Run
 
 ```bash
+uv run graphrag-adopt --dry-run
+```
+
+Only for a project pointed at a graph something else built: reports what adoption
+would change and writes nothing. Skip it entirely for a project that builds its
+own graph. See **Adopting an existing graph**.
+
+```bash
 uv run graphrag-setup
 ```
 
 Creates the vector index, two fulltext indexes and supporting range indexes, then
-blocks until all of them report `ONLINE`.
+blocks until all of them report `ONLINE`. Every label and property it indexes
+comes from the project's `lexical` spec.
 
 ```bash
 uv run graphrag-ingest
@@ -121,7 +194,9 @@ uv run graphrag-ingest
 
 Chunks every document in the project's data directory, embeds each chunk, extracts
 entities and relationships under the project's schema, rolls up evidence levels,
-then merges duplicate entities. `.md`, `.txt` and `.pdf` are picked up, recursively.
+then merges duplicate entities. `.md`, `.markdown` and `.pdf` are picked up,
+recursively — those are what the pipeline's default file loader can read, and it
+raises on anything else rather than ingesting it to nothing.
 
 Name files explicitly to ingest only those — `uv run graphrag-ingest data/one-new-note.md`
 — and pass `--no-resolve` to skip the duplicate-entity merge, which is what you want
@@ -187,22 +262,67 @@ or key auth — except for the API version, which it sets itself. See
 
 ## The explorer
 
+Three views over the one graph, switched in the masthead:
+
+| View | What it shows |
+|---|---|
+| **Graph** | The records, by default — every one of them, as the graph they form. `Types` rolls it up to one node per label, sized by how many records carry it and with edges weighted by how many relationships they stand for; click a type for its records, then click a record for itself, its neighbours and every relationship named. |
+| **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
+| **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
+
+- **The question, the answer and the example prompts share one chat column**
+  to the right of the graph: the answer at the top, filling the column and
+  scrolling, the example prompts above the input, and the input pinned to the
+  bottom. An answer costs the graph no height, and the canvas keeps the
+  landscape shape a force layout wants. A record's detail panel floats over
+  the graph beside the column rather than displacing it. Closing an answer
+  returns to the whole graph, whatever was showing when the question was asked.
 - **Ask a question** — the graph unfolds in step with the pipeline rather than
   redrawing once at the end: the matched passages first, then the entities
   extracted from them, then one hop of neighbours, while the model is still
-  writing. The standing graph is ghosted the moment you ask, a stage line names
-  what is running, and the camera re-fits to each ring as it lands — so by the
-  time the prose arrives the view is already framed on the evidence. Evidence
-  levels in the answer are colour-coded. `agent` mode has no rings to stream — it
-  decides what to read as it goes — so it lights up what its tools touched, plus
-  one hop out, once, at the end.
-- **Filter** by entity type or evidence level; counts come from the live graph.
-- **Click a node** for its properties and every connection, each one clickable.
-- **Search** runs against a fulltext index over entity names and descriptions.
-- **Timeline** lists dated `:Event` nodes in order. It has something to show only
-  when the project's schema declares an `Event` type carrying a `date` —
-  `projects.example` declares neither, so against the template's own corpus the
-  button comes back empty.
+  writing. The result is laid out by the same force simulation as the standing
+  graph — the way Browser and Aura lay out a result — with each new node growing
+  out of a neighbour already on screen, so the stages still arrive in order
+  while the picture stays a graph rather than a diagram of one. The standing graph is ghosted as the first ring lands (not when you
+  ask — the agent can take a minute to choose its tools, and an empty stage for
+  all of it is not a loading state), a stage line names what is running, a
+  segmented indicator says how much is still to come, and the camera re-fits to
+  each ring. Evidence levels in the answer are colour-coded where the corpus has
+  them. `agent` mode has no rings to stream — it decides what to read as it goes
+  — so it lights up what its tools touched, plus one hop out, once, at the end.
+- **Filter** by group, by individual label, or by evidence level. Counts come
+  from the live graph. Entities with no relationship at all are excluded by
+  default and offered as their own toggle: on a large extracted corpus they can
+  be a third of the nodes and they bury the structure worth looking at.
+- **Small graphs are drawn the way Neo4j Browser and Aura draw them**: a big
+  circle with its caption inside it, every relationship carrying its type and an
+  arrowhead. Nothing has to be matched against a legend and the direction of an
+  edge is on the edge. Above about thirty nodes the circles can no longer hold
+  text, so the view switches to dots with labels outside — captions in circles
+  that small are three characters and a worse picture than none.
+- **Nodes and edges scale to the size of the graph.** A thousand records drawn
+  at the radius that suits thirty is a mass of overlapping discs with no gaps
+  for the edges to show through, and eight hundred edges at the weight that
+  suits eighty sum to a white blob in the middle. Both shrink as the graph
+  grows, and the centre gravity weakens with it, so components separate instead
+  of packing into a ball.
+- **Labels appear where they can be read.** A thousand names at four pixels of
+  separation is a grey texture that hides the structure it annotates, so a label
+  needs either a sparse graph or enough zoom that its node is genuinely big on
+  screen; the remaining labels are placed greedily, most-connected first, and one
+  that would collide with a label already placed is dropped rather than
+  overstruck. Whatever is under the pointer or selected is always named, so
+  nothing is ever unidentifiable.
+- **Click a node** for every property the extractor recorded and every
+  connection, each one clickable. Properties are passed through wholesale rather
+  than picked from a fixed list, because in most corpora the domain properties
+  *are* the record.
+- **Search** runs against a fulltext index over the project's
+  `entity_text_properties`.
+- **Add a document** runs the ingestion pipeline over an uploaded file and
+  streams what it found, then lights up what the document added and what it
+  connected to. Hidden behind nothing — it writes to the same graph you are
+  looking at.
 
 **The highlight is not the retriever's own result.** Whatever retriever answered,
 the rings come from a separate vector + fulltext lookup for the question
@@ -226,11 +346,16 @@ also the shortest path to putting your own front-end on the graph:
 
 | Route | Returns |
 |---|---|
-| `GET /api/meta` | Project title, labels, evidence levels, palette, live counts. |
-| `GET /api/graph?labels=&status=` | The whole graph, comma-separated filters. Both default to everything the project declares. |
+| `GET /api/meta` | Project title, labels, POLE groups, palette, live counts, evidence levels if the corpus has any. |
+| `GET /api/schema` | The project's schema **as a graph** — one node per type with its properties and live count, one edge per pattern. The model itself, queryable. |
+| `GET /api/overview?labels=` | The graph rolled up by type: one node per label, one weighted edge per (label, type, label) actually present. Unlike `/api/schema` this counts the data, so a pattern the schema allows but the corpus never uses does not appear. |
+| `GET /api/instances?label=&limit=` | The drill-down: that type's most connected records plus their neighbours, with the true total alongside. |
+| `GET /api/graph?labels=&status=&connected=` | The entity graph, comma-separated filters. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
 | `GET /api/expand?id=` | One node plus its direct neighbours and the edges among them. |
-| `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. |
-| `GET /api/timeline` | Dated `:Event` nodes in date order. |
+| `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. Terms are Lucene-escaped, so a half-typed query is a search rather than a 500. |
+| `GET /api/timeline` | Entities carrying the project's `date_property`, in order. |
+| `GET /api/documents` | The corpus behind the graph: each source file with its passage and record counts. |
+| `POST /api/documents` | **Extend the graph.** Multipart upload; runs the same pipeline, schema and extraction rules over the new file and streams stages as SSE, ending with the subgraph it added. |
 | `POST /api/ask` | Answer, retrieved context, and evidence subgraph, as one JSON body. |
 | `POST /api/ask/stream` | The same work as Server-Sent Events, one event per stage. |
 
@@ -271,6 +396,88 @@ Two variables are injected into that fragment by the library and must not be
 re-declared: `node` (the matched `:Chunk`) and `score`. `score` must appear in the
 `RETURN`.
 
+## Adopting an existing graph
+
+A graph built by another tool — Neo4j Document Intelligence, an earlier project,
+a colleague's import — usually has the right *shape* and the wrong *names*.
+`ProjectSpec.lexical` describes the names, so the engine reads it as it is:
+
+```python
+lexical=LexicalSpec(
+    adopted_chunk_label="__Chunk__",        # chunks already carry this
+    source_label="__Document__",            # source files, kept distinct from
+                                            # any `Document` *entity* in the schema
+    embedding_property="openai_embedding",  # `embedding` is taken, by another model
+    entity_to_chunk="FROM_CHUNK|__NODE_TO_CHUNK__",   # read both conventions
+    chunk_to_source="FROM_DOCUMENT|__CHUNK_TO_DOCUMENT__",
+)
+```
+
+Cypher alternation in the relationship fields is what lets one pattern match both
+the adopted wiring and the wiring of documents ingested later, without mirroring
+thousands of relationships to rename them. The same spec also configures the
+*writer*, through `LexicalGraphConfig`, so new documents are written in the shape
+the graph already uses rather than corrected afterwards. That matters more than it
+sounds: the writer reserves the label `Document` for source files, so in a schema
+that has a `Document` entity type the two collide, and an extracted Document is
+written as a lexical node with no `__Entity__` label — invisible to every query
+the engine runs.
+
+Three things cannot be handled by reading, and `graphrag-adopt` does them:
+
+```bash
+uv run graphrag-adopt --dry-run    # report what would change, write nothing
+uv run graphrag-adopt              # apply
+uv run graphrag-adopt --undo       # remove exactly what adoption added
+```
+
+1. **The engine's chunk label**, added alongside the existing one. A vector index
+   is fixed to a single label.
+2. **Embeddings in the configured model's space.** Vectors from two different
+   models cannot share a property or an index, and they do not compare: verbatim
+   chunk text scores ~0.50 against a foreign model's vectors, which is cosine
+   zero dressed up as a similarity. Adoption writes ours beside theirs and leaves
+   theirs working.
+3. **A readable name on each source file**, where the foreign tool stored
+   something unusable — a signed, expired upload URL, in DI's case, which would
+   otherwise be what every citation in every answer quotes.
+
+### Constraints block ingestion
+
+`Neo4jWriter` inserts extracted nodes with `CREATE` and de-duplicates afterwards,
+which is why `graphrag-setup` creates no uniqueness constraints of its own. A graph
+that *does* carry them — `NODE KEY` on `name`, an existence constraint on a
+property your extractor does not always fill — rejects the second mention of the
+same entity. The pipeline logs the rejected batch and returns normally, so the
+symptom is a document that ingests to nothing.
+
+```bash
+uv run graphrag-adopt --relax-constraints
+```
+
+Drops the constraints that would reject a new document, creates plain range
+indexes on the same properties so lookups keep their index, and records the exact
+definitions on a `:__GraphRAGAdoption__` node so `--undo` restores them. The
+upload endpoint checks for them before spending a model call and refuses with the
+command to run.
+
+## Entity resolution
+
+After an ingest, `SinglePropertyExactMatchResolver` merges entities that share a
+label and an exact name. On a corpus the project built, run over everything, that
+is what you want: the same person named in six documents should be one node.
+
+On a graph the project **adopted**, it is destructive. Same-named nodes may exist
+on purpose — several distinct sightings each named "Fireball sighting" — and
+`apoc.refactor.mergeNodes` cannot be undone. So a project declaring
+`owns_graph=False` gets a `filter_query` confining resolution to entities
+reachable from the document just ingested. Duplicates *within* the new document
+still merge; nothing outside it is touched.
+
+The same flag makes `graphrag-reset` refuse without
+`--i-know-this-graph-is-not-mine`, because "everything this demo created" is not a
+set that command can compute on a graph it did not create.
+
 ## Evidence levels
 
 Every entity carries a `status`. The engine treats these as ordered,
@@ -300,8 +507,10 @@ rules that grade everything.
 uv run graphrag-reset --yes
 ```
 
-Deletes only the labels this scaffold writes (`Document`, `Chunk`, `__Entity__`,
-`__KGBuilder__`) and drops its indexes. Safe against a database holding other data.
+Deletes only the labels this scaffold writes — the project's source and chunk
+labels, `__Entity__` and `__KGBuilder__` — and drops its indexes. Safe against a
+database holding other data, and it refuses outright on a project with
+`owns_graph=False`.
 Because the indexes go with it, the loop back to a working graph is
 `graphrag-reset` → `graphrag-setup` → `graphrag-ingest`.
 
@@ -388,9 +597,11 @@ retriever span the lot. Reset between projects, or give each its own
 
 ```
 src/graphrag_kit/
-  project.py          ProjectSpec — the engine/corpus seam
+  project.py          ProjectSpec / LexicalSpec — the engine/corpus seam
   config.py           env loading, driver / LLM / embedder factories
+  cypher.py           Cypher fragments built from the project spec
   setup_indexes.py    indexes + ONLINE polling       -> graphrag-setup
+  adopt.py            read a graph built elsewhere   -> graphrag-adopt
   ingest.py           SimpleKGPipeline + rollup      -> graphrag-ingest
   retrievers.py       five retrievers, retrieval_query, RAG prompt
   ask.py              terminal client                -> graphrag-ask
