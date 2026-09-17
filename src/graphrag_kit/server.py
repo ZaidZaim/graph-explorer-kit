@@ -46,7 +46,7 @@ from typing import Any
 
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from neo4j_graphrag.generation import GraphRAG
 from neo4j_graphrag.generation.prompts import RagTemplate
@@ -1155,6 +1155,18 @@ async def no_store(request, call_next):
 @app.get("/")
 def index() -> FileResponse:
     return FileResponse(STATIC_DIR / "index.html")
+
+
+@app.get("/theme.css")
+def theme_css() -> Response:
+    """The project's own stylesheet, or an empty one.
+
+    Always 200 with text/css so the <link> in index.html is unconditional, and
+    never cached so editing a theme while the server runs is a plain reload.
+    """
+    path = spec().theme_css
+    body = path.read_text(encoding="utf-8") if path and path.is_file() else ""
+    return Response(body, media_type="text/css", headers={"Cache-Control": "no-cache"})
 
 
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
