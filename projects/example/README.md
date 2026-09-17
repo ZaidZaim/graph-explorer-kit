@@ -103,7 +103,7 @@ No `graphrag_kit` code changes. The engine reads everything it needs from the
 
 ## What a project owns
 
-Eighteen fields. The first five have no defaults, and three of them are the ones
+Nineteen fields. The first five have no defaults, and three of them are the ones
 people forget to change when they copy:
 
 | Field | What it does |
@@ -122,6 +122,7 @@ people forget to change when they copy:
 | `date_property` | The property the Timeline view orders by. `None` hides the view. |
 | `groups` / `group_colors` | An optional lens over the labels, such as POLE. The explorer groups its filters by it and colours nodes by group. |
 | `owns_graph` / `lexical` | For a project that reads a graph another tool built. See the main README, **Adopting an existing graph**. |
+| `theme_css` | Optional stylesheet loaded after the engine's own. Override the tokens at the top of `styles.css` to give the explorer the look of your subject; the graph canvas follows the same tokens. |
 
 Full definitions and defaults: [`project.py`](../../src/graphrag_kit/project.py).
 

@@ -97,6 +97,7 @@ Four optional parts of the spec carry more weight than their size suggests:
 | `groups` | A lens over the labels — POLE (Person, Object, Location, Event) in the `ufo-documents` branch, for example. The explorer groups its filters and colours its nodes by it, and serves the model itself as a view, so the model an analyst is taught is the model the picture shows. |
 | `name_properties` | Not every entity has a `name`. A Claim is identified by its text and a Document by its title, and a graph that renders both as "(unnamed)" is useless. |
 | `lexical` | How the chunk/embedding layer is *named*. The defaults are what `neo4j-graphrag` writes itself; overriding them lets the engine read a graph another tool built without rewriting anyone's data. See **Adopting an existing graph**. |
+| `theme_css` | A stylesheet of the project's own, loaded after the engine's. It overrides the design tokens, so a corpus can look like its subject while the engine stays neutral. See `projects/vicecity/theme.css` on the `vice-city` branch. |
 | `owns_graph` | `False` when the project only reads and extends someone else's graph. It makes the engine cautious in the two places that would otherwise change data it did not write — see **Entity resolution**. |
 
 Branches in this repo follow that split: `main` is the scaffold plus a neutral

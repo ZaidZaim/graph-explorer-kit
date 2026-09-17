@@ -156,6 +156,12 @@ class ProjectSpec:
     owns_graph: bool = True
 
     lexical: LexicalSpec = field(default_factory=LexicalSpec)
+    # A stylesheet the explorer loads after its own, so a project can carry the
+    # visual idiom of its subject - palette, type, chrome - without a fork of
+    # the front-end. It overrides the tokens in static/styles.css; the canvas
+    # reads the same tokens, so the graph follows. None means the engine's
+    # neutral look.
+    theme_css: Path | None = None
 
     @property
     def labels(self) -> list[str]:

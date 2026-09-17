@@ -39,6 +39,7 @@ const theme = {
   inkRgb: '196,214,236',
   label: '#D9E2EC',
   labelEmph: '#ffffff',
+  mono: '"IBM Plex Mono", ui-monospace, monospace',
 };
 
 /** Re-read the theme tokens from the document. Called once at start and again
@@ -54,6 +55,7 @@ function readTheme() {
   theme.inkRgb = token('--ink-rgb', theme.inkRgb).replace(/\s+/g, '');
   theme.label = token('--label-text', theme.label);
   theme.labelEmph = token('--label-emph', theme.labelEmph);
+  theme.mono = token('--mono', theme.mono);
 }
 const accent = (alpha) => `rgba(${theme.accentRgb},${alpha})`;
 const ink = (alpha) => `rgba(${theme.inkRgb},${alpha})`;
@@ -803,7 +805,7 @@ function createCanvasRenderer(container, opts) {
     candidates.sort((a, b) => b.weight - a.weight);
     const placed = [...reserved];
     ctx.save();
-    ctx.font = `${px(8.5)}px "IBM Plex Mono", ui-monospace, monospace`;
+    ctx.font = `${px(8.5)}px ${theme.mono}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (const item of candidates) {
@@ -850,7 +852,7 @@ function createCanvasRenderer(container, opts) {
     const gap = 2;
     for (const item of candidates) {
       const { n, r, alpha, named } = item;
-      ctx.font = `${(named ? 11.5 : 10.5) / view.scale}px "IBM Plex Mono", ui-monospace, monospace`;
+      ctx.font = `${(named ? 11.5 : 10.5) / view.scale}px ${theme.mono}`;
       const text = n.name.length > 34 ? n.name.slice(0, 33) + '…' : n.name;
       // Screen space, because that is where the collisions happen: the world
       // gap between two nodes shrinks with the zoom, the text does not.
@@ -923,7 +925,7 @@ function createCanvasRenderer(container, opts) {
     // Below this the text would be unreadable anyway, and a circle full of
     // grey mush is worse than a plain circle.
     if (onScreen < 11) return null;
-    const font = `${px(size)}px "IBM Plex Mono", ui-monospace, monospace`;
+    const font = `${px(size)}px ${theme.mono}`;
     const lines = wrapCaption(n.name, r, font);
     if (!lines.length) return null;
     const lineHeight = px(size * 1.3);
@@ -951,7 +953,7 @@ function createCanvasRenderer(container, opts) {
   function drawLabel(n, r, alpha, emphasise = false) {
     const px = (v) => v / view.scale;
     ctx.globalAlpha = alpha;
-    ctx.font = `${px(emphasise ? 11.5 : 10.5)}px "IBM Plex Mono", ui-monospace, monospace`;
+    ctx.font = `${px(emphasise ? 11.5 : 10.5)}px ${theme.mono}`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
     const label = n.name.length > 34 ? n.name.slice(0, 33) + '…' : n.name;
