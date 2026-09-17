@@ -196,6 +196,9 @@ function startClock() {
  *  Little is covered now that the answer lives in the dock and the dock is in
  *  the layout flow rather than over the canvas. The one case left is the record
  *  detail panel, which becomes a fixed overlay on the right below 1240px. */
+/** Height reserved under the graph for the caption and note. */
+const STATUS_LINE_H = 32;
+
 function syncInsets() {
   const area = $('graph-area').getBoundingClientRect();
   const details = $('details');
@@ -205,7 +208,9 @@ function syncInsets() {
     // Overlapping the graph area means it is the fixed overlay, not a column.
     if (r.left < area.right) right = Math.max(0, area.right - r.left);
   }
-  state.renderer?.setInsets({ left: 0, top: 0, right, bottom: 0 });
+  // The status line along the bottom edge of the graph area.
+  const bottom = $('stage-caption').hidden && $('stage-note').hidden ? 0 : STATUS_LINE_H;
+  state.renderer?.setInsets({ left: 0, top: 0, right, bottom });
   refitSoon();
 }
 
@@ -227,13 +232,18 @@ function setLoading(text) {
 function setCaption(text) {
   const el = $('stage-caption');
   el.textContent = text ?? '';
+  const changed = el.hidden !== !text;
   el.hidden = !text;
+  // The status line reserves height under the graph only while it shows.
+  if (changed) syncInsets();
 }
 
 function setNote(text) {
   const el = $('stage-note');
   el.textContent = text ?? '';
+  const changed = el.hidden !== !text;
   el.hidden = !text;
+  if (changed) syncInsets();
 }
 
 /* ---------------- POLE filters ---------------- */

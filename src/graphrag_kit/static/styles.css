@@ -421,16 +421,18 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
     180deg, var(--scanline) 0 1px, transparent 1px 4px);
 }
 
-/* Top-right of the stage: the one corner no panel claims. At the bottom it sat
-   underneath the example chips. */
+/* A status line along the bottom edge of the graph: the caption reads from
+   the left, the note from the right. With the chat beside the graph the
+   canvas is too narrow for a block of text in a corner - it sat on top of
+   nodes - and the bottom edge is free now that the prompts have moved. The
+   camera fit reserves this strip (see syncInsets), so nodes never sit under it. */
 .stage-caption, .stage-note {
-  position: absolute; z-index: 4; right: 20px; top: 18px; margin: 0;
-  font-size: 9.5px; color: var(--dim); max-width: 260px; line-height: 1.75;
-  letter-spacing: 0.1em; text-align: right;
+  position: absolute; z-index: 4; bottom: 10px; margin: 0;
+  font-size: 9.5px; color: var(--dim); line-height: 1.6;
+  letter-spacing: 0.1em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-/* Stacked under the caption rather than at the bottom of the stage, where the
-   example chips wrap into it. */
-.stage-note { top: 74px; color: var(--cyan); opacity: .75; }
+.stage-caption { left: 16px; max-width: 58%; text-align: left; }
+.stage-note { right: 16px; max-width: 40%; text-align: right; color: var(--cyan); opacity: .75; }
 
 #structure-filters { margin-top: 10px; padding-top: 9px; border-top: 1px solid var(--rule-soft); }
 #structure-filters li { color: var(--muted); }
