@@ -27,6 +27,53 @@ projects/<name>/data/*.md ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_D
                                             answer + evidence subgraph
 ```
 
+## Why a graph
+
+Retrieval over embeddings finds the passages that sound like your question.
+That's enough when the answer sits in one paragraph. Most questions worth
+asking a corpus don't work that way: the answer is spread across documents,
+and the connection between them was never written down in any one of them.
+
+"Who runs engineering at the company Kestrel competes with?" needs a fact from
+one briefing (who Kestrel competes with) and a fact from another (who leads
+engineering there). No passage holds both, so no embedding matches the question
+well, and a vector search hands you two half-answers.
+
+A knowledge graph stores the connecting fact explicitly. Extraction turns each
+document into the entities it names and the relationships it asserts between
+them, and the question becomes a walk: Kestrel, `COMPETES_WITH`, Meridian,
+`WORKS_AT` read backwards, Dr. Amara Okonjo. Two hops, one answer, and every
+hop points back at the passage that justified it.
+
+That last part is the ontology's job, and it's why every project here starts
+with a schema rather than a prompt. The schema says which kinds of things exist
+in this domain, which relationships between them are allowed, and which
+properties matter. It holds the extractor to those, so the graph you get is the
+model you meant. And it gives everything downstream something to reason over:
+the agent reads it to write Cypher, the explorer draws it as the Schema view,
+and the extraction rules cite it. Change the domain and the schema changes with
+it. The engine doesn't.
+
+Three things fall out of storing knowledge this way:
+
+- **Multi-hop answers.** Questions that span documents are one traversal
+  instead of a lucky embedding match.
+- **Provenance you can show.** Every entity keeps `FROM_CHUNK` to the passage
+  it came from, and every passage keeps `FROM_DOCUMENT` to its source. The
+  explorer draws that chain as the answer forms, so "where did this come from?"
+  is a picture you can click through.
+- **Structure and text together.** Hybrid retrieval scores passages by
+  embedding and by keyword, then follows the graph out from them. You get the
+  recall of vector search and the precision of a query in one call.
+
+Two projects show the range. `projects/example` is a fictional port-automation
+sector: four entity types, five relationships, and a corpus written so the
+interesting answers cross documents. `projects/ufo`, on the `ufo-documents`
+branch, is the US Department of War's released UAP records: 17 types under a
+POLE ontology, a graph another tool built, and a corpus whose whole difficulty
+is that it asserts things rather than states them. Each project's README
+explains its own ontology and why it's shaped the way it is.
+
 ## The split
 
 Everything in `src/graphrag_kit/` is domain-agnostic. Everything that makes a demo

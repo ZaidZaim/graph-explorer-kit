@@ -3,7 +3,7 @@
 A GraphRAG demo over the UAP records released by the US Department of War under
 PURSUE (Presidential Unsealing and Reporting System for UAP Encounters). The
 graph was first built with **Neo4j Document Intelligence** from the released
-PDFs; this project puts the `neo4j-graphrag` engine on top of it — schema view,
+PDFs. This project puts the `neo4j-graphrag` engine on top of it: a schema view,
 graph retrieval, an agent that picks its own tools, and ingestion for documents
 added later.
 
@@ -11,35 +11,61 @@ added later.
 GRAPHRAG_PROJECT=projects.ufo
 ```
 
-## What is in the graph
+## The use case
 
-1,072 extracted records across 17 labels, 808 relationships between them, and a
-lexical layer of 78 passages from 10 source files.
+The releases are scans of typewritten reports, memos, and forms from the 1940s
+onwards. Each one records what someone saw, who saw it, where, what an
+instrument captured, what an agency concluded, and what was withheld. The
+questions an analyst brings to them all cross documents:
 
-| POLE group | Labels |
-|---|---|
-| **PERSON** | `Person` · `Witness` |
-| **OBJECT** | `UAP_Object` · `Vehicle` · `Sensor` · `MediaAsset` |
-| **LOCATION** | `Location` · `Facility` |
-| **EVENT** | `Event` · `Observation` |
-| **ORGANIZATION** | `Agency` |
-| **RECORD** | `Document` · `Release` · `CaseFile` · `Claim` · `Evidence` · `Redaction` |
+- What did witnesses report over New Mexico in 1949, and which agencies looked
+  into it?
+- Which claims rest on a single witness, and which have instrument data behind
+  them?
+- Where does the record contradict itself?
+- What was redacted, and under which exemption?
 
-POLE (Person, Object, Location, Event) is the intelligence-analysis model used in
-policing and investigations: every fact anchors to one of four entity kinds, so
-heterogeneous material lands in one queryable structure. Two groups are added to
-it, both because this corpus cannot be read without them — `ORGANIZATION`,
-because agencies act in their own right, and `RECORD`, because **a UAP corpus is
-not a corpus of facts, it is a corpus of documents asserting facts.** Keeping the
-assertion and the asserter as first-class nodes is what lets the demo answer
-"where does the record contradict itself?" at all.
+None of those is answered by a paragraph. A sighting appears in a witness
+statement, an intelligence summary, and a redacted memo, and the three don't
+agree on the date, the shape, or the count. Flatten the corpus to passages and
+you keep the words but lose who said them. The graph keeps both: the assertion
+and the asserter, as nodes, with the passage that carried each one a hop away.
 
-The domain's own labels are kept rather than collapsed into the four POLE
-classes. `Witness` is not merged into `Person` and `Observation` is not merged
-into `Event`, because the distinction is the evidence: an Observation carries the
-shape, colour, movement, speed, altitude and duration that were actually
-recorded, and a Witness is the person whose testimony is the only support for
-it. POLE is the lens over the labels, not a replacement for them.
+That's also why this corpus is a good test of extending a graph. New releases
+arrive as more PDFs. Ingesting one with the same schema attaches its events to
+locations and agencies the graph already knows, and the explorer shows what the
+document added and what it connected to.
+
+## The ontology: POLE, plus two
+
+POLE (Person, Object, Location, Event) is the model intelligence analysts use
+in policing and investigation. Every fact anchors to one of four kinds of thing,
+so heterogeneous material lands in one queryable structure. This project keeps
+POLE as the lens and adds two groups the corpus can't be read without.
+
+| Group | Labels | What it holds |
+|---|---|---|
+| **PERSON** | `Person` · `Witness` | Named individuals, and the people whose testimony is the only support for an observation |
+| **OBJECT** | `UAP_Object` · `Vehicle` · `Sensor` · `MediaAsset` | What was seen, what the observer was in, what recorded it, and the photo or film that resulted |
+| **LOCATION** | `Location` · `Facility` | Where it happened, and the base or installation involved |
+| **EVENT** | `Event` · `Observation` | The sighting as an occurrence, and each individual account of it |
+| **ORGANIZATION** | `Agency` | Who investigated, who concluded, who authored |
+| **RECORD** | `Document` · `Release` · `CaseFile` · `Claim` · `Evidence` · `Redaction` | The paper trail itself |
+
+`ORGANIZATION` exists because agencies act in their own right: they investigate,
+conclude, and redact. `RECORD` exists because **a UAP corpus is a corpus of
+documents asserting facts.** A `Claim` is a statement someone made, `Evidence`
+is what supports it, and a `Redaction` is what was withheld and the exemption
+cited for it. Keeping those as nodes rather than as text is what lets the demo
+answer "where does the record contradict itself?" at all: two claims about one
+event, asserted by two documents, are a pattern you can match.
+
+The domain's own labels stay rather than collapsing into the four POLE classes.
+`Witness` is not folded into `Person` and `Observation` is not folded into
+`Event`, because the distinction is the evidence. An `Observation` carries the
+shape, colour, movement, speed, altitude, and duration that were recorded, and
+a `Witness` is the person whose word it rests on. POLE is the lens over the
+labels, and the labels keep the detail.
 
 The sighting chain is the spine of the graph:
 
@@ -47,9 +73,39 @@ The sighting chain is the spine of the graph:
 (:Document)-[:DESCRIBES_EVENT]->(:Event)-[:HAS_OBSERVATION]->(:Observation)-[:DESCRIBES_OBJECT]->(:UAP_Object)
                                     │                              │
                           [:OCCURRED_AT]                   [:REPORTED_BY] / [:CAPTURED_BY]
-                                    ▼                              ▼
-                              (:Location)                (:Witness) / (:Sensor)
+                          [:INVESTIGATED_BY]                       ▼
+                                    ▼                    (:Witness) / (:Sensor)
+                          (:Location) / (:Agency)
 ```
+
+Around it, `Document-[:MENTIONS]->` reaches every other type, `Claim-[:SUPPORTED_BY]->Evidence`
+ties an assertion to its backing, `Document-[:PART_OF_RELEASE]->Release|CaseFile`
+places each file in the batch it came out of, and `SAME_AS` / `POSSIBLY_SAME_AS`
+between events, objects, and persons record where the documents themselves say,
+or hint, that two records describe one thing. Thirteen relationship types, 30
+allowed patterns, and the extractor may not invent a fourteenth.
+
+## Why a graph
+
+- **The answer is a path.** "Which agencies investigated events with a
+  single witness?" is `Agency <- Event -> Observation -> Witness` with a
+  count. No passage says it, so no embedding finds it.
+- **Contradiction is a pattern.** Two `Claim` nodes about one `Event`, each
+  asserted by a different `Document`, disagreeing on a property. That's a
+  query, and the answer names both documents.
+- **Provenance is structural.** Every entity keeps a link to the passage it
+  came from, and every passage to its PDF. When the explorer answers, it draws
+  that chain first, so you see the evidence before the prose.
+- **The asserter is a node.** Documents, agencies, and witnesses are
+  first-class, so "who says so?" is a hop rather than a search.
+- **It grows without a rebuild.** A new release ingests under the same
+  schema, and entity resolution scoped to the new document attaches it to the
+  places and agencies already in the graph.
+
+## What is in the graph
+
+1,072 extracted records across 17 labels, 808 relationships between them, and a
+lexical layer of 78 passages from 10 source files.
 
 ## Running it
 
