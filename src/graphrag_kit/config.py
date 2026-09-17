@@ -29,12 +29,20 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # silently shadow this project's .env and point the demo at the wrong instance.
 load_dotenv(PROJECT_ROOT / ".env", override=True)
 
+# Index names are ours to choose, so they are fixed here. What the chunk nodes
+# and their properties are *called* is a property of the graph being read, which
+# is not always a graph this engine wrote — see ProjectSpec.lexical.
 VECTOR_INDEX_NAME = "chunk_embedding"
 FULLTEXT_INDEX_NAME = "chunk_fulltext"
 ENTITY_FULLTEXT_INDEX_NAME = "entity_fulltext"
-CHUNK_LABEL = "Chunk"
-CHUNK_EMBEDDING_PROPERTY = "embedding"
-CHUNK_TEXT_PROPERTY = "text"
+
+
+def lexical():
+    """The active project's lexical-layer naming. Imported lazily to keep
+    `config` free of any dependency on which corpus is loaded."""
+    from graphrag_kit.project import load_project
+
+    return load_project().lexical
 
 #: Scope for Entra tokens against Foundry / Azure OpenAI endpoints.
 AZURE_COGNITIVE_SCOPE = "https://cognitiveservices.azure.com/.default"
@@ -103,9 +111,20 @@ class Neo4jSettings:
 
 
 def get_driver() -> neo4j.Driver:
-    """Return a verified Neo4j driver. Caller is responsible for closing it."""
+    """Return a verified Neo4j driver. Caller is responsible for closing it.
+
+    Server notifications are not logged as warnings. The engine deliberately
+    probes for labels and properties that may not exist yet — a chunk label
+    before adoption, an evidence property in a corpus that has none — and each
+    probe otherwise prints a 20-line UNRECOGNIZED warning that looks like a
+    failure and buries the output that matters.
+    """
     settings = Neo4jSettings.from_env()
-    driver = neo4j.GraphDatabase.driver(settings.uri, auth=(settings.username, settings.password))
+    driver = neo4j.GraphDatabase.driver(
+        settings.uri,
+        auth=(settings.username, settings.password),
+        warn_notification_severity=neo4j.NotificationMinimumSeverity.OFF,
+    )
     driver.verify_connectivity()
     return driver
 

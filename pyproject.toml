@@ -9,6 +9,8 @@ dependencies = [
     "neo4j>=5.28.0",
     "python-dotenv>=1.0.1",
     "fastapi>=0.115.0",
+    # FastAPI needs this for multipart form data — the document upload endpoint.
+    "python-multipart>=0.0.20",
     "uvicorn[standard]>=0.32.0",
     # neo4j-graphrag's [openai] and [experimental] extras both pin openai<2 (the
     # latter transitively, through llama-index), and agent-framework-openai needs
@@ -24,10 +26,11 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff>=0.9.0"]
+dev = ["ruff>=0.9.0", "pytest>=8.3.0"]
 
 [project.scripts]
 graphrag-setup = "graphrag_kit.setup_indexes:main"
+graphrag-adopt = "graphrag_kit.adopt:main"
 graphrag-ingest = "graphrag_kit.ingest:main"
 graphrag-ask = "graphrag_kit.ask:main"
 graphrag-agent = "graphrag_kit.agent:main"
@@ -40,6 +43,11 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/graphrag_kit", "projects"]
+
+[tool.pytest.ini_options]
+# The tests cover the pure parts — the Cypher the engine builds from a spec, and
+# the spec's own invariants. Nothing here touches a database or a model.
+testpaths = ["tests"]
 
 [tool.ruff]
 line-length = 100
