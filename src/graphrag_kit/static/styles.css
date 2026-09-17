@@ -47,6 +47,7 @@
 
   --rail: 288px;
   --detail: 340px;
+  --chat: 372px;
   --mast: 62px;
 }
 
@@ -406,10 +407,10 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
    the canvas is sized to - so the dock never covers the graph, and the fit needs
    no reservation for it. */
 #stage {
-  grid-area: stage; display: flex; flex-direction: column;
-  min-height: 0; overflow: hidden; background: var(--bg);
+  grid-area: stage; display: flex; flex-direction: row;
+  min-height: 0; min-width: 0; overflow: hidden; background: var(--bg);
 }
-#graph-area { position: relative; flex: 1 1 auto; min-height: 0; overflow: hidden; }
+#graph-area { position: relative; flex: 1 1 auto; min-height: 0; min-width: 0; overflow: hidden; }
 #graph { position: absolute; inset: 0; }
 
 /* The faint horizontal banding the source site uses over its dark hero. Pure
@@ -451,45 +452,58 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 
 /* ---------- dock: question, answer and prompts together ---------- */
 
+/* A chat column on the right of the graph. The transcript fills the height
+   and scrolls; the prompt chips and the input are pinned to the bottom, the
+   way a chat client lays itself out. Beside the graph rather than under it,
+   an answer costs the graph no height at all, and the canvas keeps the
+   landscape shape a force layout wants. */
 #dock {
-  flex: none; z-index: 6;
-  display: flex; flex-direction: column; gap: 8px;
-  padding: 9px 20px 10px;
+  flex: none; width: var(--chat); min-width: 0; z-index: 6;
+  display: flex; flex-direction: column; gap: 10px;
+  padding: 14px 16px 14px;
   background: var(--bg-2);
-  border-top: 1px solid var(--rule);
+  border-left: 1px solid var(--rule);
 }
-#ask-form { display: flex; gap: 7px; }
+.dock-head { flex: none; padding-bottom: 10px; border-bottom: 1px solid var(--rule-soft); }
+.dock-head h2 {
+  margin: 0; font-size: 9.5px; letter-spacing: 0.2em;
+  text-transform: uppercase; color: var(--cyan); font-weight: 400;
+}
+.dock-head p { margin: 5px 0 0; font-size: 9.5px; color: var(--dim); letter-spacing: 0.06em; line-height: 1.6; }
+
+#ask-form { flex: none; display: flex; flex-direction: column; gap: 7px; }
 #ask-form input {
-  flex: 1;
+  width: 100%;
   background: var(--well);
   border: 1px solid var(--rule);
   padding: 11px 14px; font-size: 12.5px; letter-spacing: 0.05em;
 }
+.ask-row { display: flex; gap: 7px; }
+.ask-row select { flex: 1 1 auto; min-width: 0; }
+.ask-row button { flex: none; }
 #ask-form select {
   width: auto; font-size: 10px; padding: 0 8px; text-transform: uppercase;
 }
 
-.examples { display: flex; flex-wrap: wrap; gap: 5px; justify-content: center; }
+/* The chips sit just above the input, left-aligned, one per line in a column
+   this narrow. `margin-top: auto` pins the prompt area to the bottom while
+   the transcript is empty. */
+.examples { display: flex; flex-direction: column; align-items: stretch; gap: 5px; margin-top: auto; }
 .examples button {
   background: var(--well-soft);
   border-color: var(--rule-soft); color: var(--dim);
-  font-size: 9.5px; padding: 4px 10px; letter-spacing: 0.08em;
-  text-transform: none;
+  font-size: 9.5px; padding: 6px 10px; letter-spacing: 0.06em;
+  text-transform: none; text-align: left; line-height: 1.45;
 }
 .examples button:hover { color: var(--cyan); border-color: var(--cyan-deep); }
 
-/* The answer sits in the dock above the input, like a chat transcript. It is
-   capped to a share of the viewport and scrolls, so a long answer shrinks the
-   graph by a bounded amount rather than pushing it off the screen. */
+/* The answer is the transcript: it takes whatever height the column has left
+   and scrolls inside it. */
 .answer {
-  /* Bounded in pixels, not a share of the viewport: the answer scrolls, so it
-     needs only enough height to read comfortably, and every pixel it takes is
-     a pixel the graph above loses. At 34vh an open answer left a laptop-height
-     stage with 237px of graph. */
-  max-height: clamp(150px, 24vh, 240px); overflow-y: auto;
+  flex: 1 1 auto; min-height: 0; overflow-y: auto;
   background: var(--well-soft);
   border: 1px solid var(--rule); border-radius: var(--radius);
-  padding: 12px 16px;
+  padding: 12px 14px;
 }
 .answer header {
   display: flex; justify-content: space-between; align-items: center;
@@ -638,20 +652,27 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
 
 /* Below this width a third grid column squeezes the stage until the answer
    panel is a letter-wide ribbon. Float the details panel over the graph
-   instead and give the canvas its full width back. */
-@media (max-width: 1240px) {
+   instead - to the left of the chat column, which keeps its place - and give
+   the canvas its width back. With the chat beside the graph, four columns
+   need a wide window, so this holds up to 1600px. */
+@media (max-width: 1600px) {
   #app.with-details {
     grid-template-columns: var(--rail) 1fr;
     grid-template-areas: "mast mast" "rail stage";
   }
   #details {
-    position: fixed; top: var(--mast); right: 0; bottom: 0; width: var(--detail);
+    position: fixed; top: var(--mast); right: var(--chat); bottom: 0; width: var(--detail);
     z-index: 9; box-shadow: -18px 0 44px var(--shadow);
   }
+}
+
+@media (max-width: 1240px) {
+  :root { --chat: 330px; }
   #hud > div:not(.hud-clock) { display: none; }
 }
 
 @media (max-width: 1040px) {
+  :root { --chat: 300px; }
   #views { margin-left: 4px; }
   #hud { display: none; }
 }
@@ -666,9 +687,16 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
     z-index: 8; transform: translateX(-100%); transition: transform .2s;
   }
   #rail:focus-within, #rail:hover { transform: none; }
-  #details { width: min(var(--detail), 100%); }
-  .answer { max-height: 30vh; }
-  #dock { padding: 9px 12px 10px; }
+  #details { right: 0; width: min(var(--detail), 100%); }
+  /* Too narrow for two columns: the dock goes back under the graph. */
+  #stage { flex-direction: column; }
+  #dock { width: auto; border-left: 0; border-top: 1px solid var(--rule); padding: 9px 12px 10px; gap: 8px; }
+  .dock-head { display: none; }
+  .answer { flex: none; max-height: 30vh; }
+  .examples { flex-direction: row; flex-wrap: wrap; margin-top: 0; }
+  .examples button { text-align: center; padding: 4px 10px; }
+  #ask-form { flex-direction: row; }
+  #ask-form input { flex: 1; width: auto; }
   .ident h1 { letter-spacing: 0.2em; font-size: 13px; }
   .stage-caption { display: none; }
 }

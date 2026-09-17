@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400;500&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=5" />
+<link rel="stylesheet" href="/static/styles.css?v=6" />
 </head>
 <body>
 <div id="app">
@@ -113,7 +113,7 @@
 
   <!-- ── stage ────────────────────────────────────────────────────── -->
   <main id="stage">
-    <!-- The graph takes the whole width above the dock. -->
+    <!-- The graph takes the width left of the dock. -->
     <div id="graph-area">
       <div id="graph"></div>
       <div class="scanlines" aria-hidden="true"></div>
@@ -131,8 +131,15 @@
       </div>
     </div>
 
-    <!-- Question, answer and prompts together, chat-style, under the graph. -->
-    <section id="dock">
+    <!-- Question, answer and prompts together, chat-style, in a column to the
+         right of the graph: the transcript at the top, the prompts above the
+         input, the input pinned to the bottom. -->
+    <section id="dock" aria-label="Ask the record">
+      <header class="dock-head">
+        <h2>Ask the record</h2>
+        <p>Answers unfold on the graph as they are reasoned out.</p>
+      </header>
+
       <section id="answer" class="answer" hidden>
         <header>
           <h2 id="answer-title">Answer</h2>
@@ -149,12 +156,14 @@
         </details>
       </section>
 
+      <div id="examples" class="examples"></div>
       <form id="ask-form">
         <input id="question" type="text" autocomplete="off" placeholder="Ask the record&hellip;" />
-        <select id="retriever" title="Retrieval strategy"></select>
-        <button type="submit" id="ask-button">Ask</button>
+        <div class="ask-row">
+          <select id="retriever" title="Retrieval strategy"></select>
+          <button type="submit" id="ask-button">Ask</button>
+        </div>
       </form>
-      <div id="examples" class="examples"></div>
     </section>
   </main>
 
@@ -174,6 +183,6 @@
   </aside>
 
 </div>
-<script type="module" src="/static/app.js?v=5"></script>
+<script type="module" src="/static/app.js?v=6"></script>
 </body>
 </html>

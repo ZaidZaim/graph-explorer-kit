@@ -662,6 +662,10 @@ function openDetails(label, color) {
   $('detail-label').style.background = color;
   $('details').hidden = false;
   $('app').classList.add('with-details');
+  // Explicit rather than left to the ResizeObserver: when the panel floats
+  // over the graph it does not change the graph area's size, and the observer
+  // on the panel itself has not proved reliable across a hidden -> shown flip.
+  syncInsets();
 }
 
 function hideDetails() {
@@ -669,6 +673,7 @@ function hideDetails() {
   $('details').hidden = true;
   $('app').classList.remove('with-details');
   state.renderer?.select(null);
+  syncInsets();
 }
 
 /* ---------------- ask ---------------- */
