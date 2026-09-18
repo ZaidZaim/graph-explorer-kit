@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400;500&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=8" />
+<link rel="stylesheet" href="/static/styles.css?v=9" />
 <!-- The active project's own look, if it ships one; empty otherwise. -->
 <link rel="stylesheet" href="/theme.css" />
 </head>
@@ -44,6 +44,21 @@
       <span class="theme-toggle-label" data-for="dark">Dark</span>
       <span class="theme-toggle-track" aria-hidden="true"><span class="theme-toggle-knob"></span></span>
       <span class="theme-toggle-label" data-for="light">Light</span>
+    </button>
+
+    <!-- Demo mode: the page takes the whole display, so the browser's address
+         bar and the OS taskbar leave the stage. F toggles it; Esc leaves. -->
+    <button type="button" id="fullscreen-toggle" class="fullscreen-toggle"
+            aria-pressed="false" aria-label="Enter full screen" title="Full screen (F)">
+      <svg class="fs-enter" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none"
+           stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M2 6V2h4M10 2h4v4M14 10v4h-4M6 14H2v-4"/>
+      </svg>
+      <svg class="fs-exit" viewBox="0 0 16 16" width="14" height="14" aria-hidden="true" fill="none"
+           stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M6 2v4H2M10 6h4V2M14 10h-4v4M2 10h4v4"/>
+      </svg>
+      <span class="fullscreen-label">Full screen</span>
     </button>
 
     <dl id="hud" aria-label="Corpus readout">
@@ -185,6 +200,6 @@
   </aside>
 
 </div>
-<script type="module" src="/static/app.js?v=7"></script>
+<script type="module" src="/static/app.js?v=8"></script>
 </body>
 </html>
