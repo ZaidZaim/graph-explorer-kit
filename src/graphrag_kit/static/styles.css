@@ -204,6 +204,23 @@ html, body {
 .theme-toggle[aria-checked="false"] .theme-toggle-label[data-for="dark"],
 .theme-toggle[aria-checked="true"] .theme-toggle-label[data-for="light"] { color: var(--cyan); }
 
+/* ---------- full screen ---------- */
+
+.fullscreen-toggle {
+  display: flex; align-items: center; gap: 7px; margin-left: 14px;
+  background: none; border: 0; padding: 4px 0; border-radius: 0; cursor: pointer;
+  color: var(--dim); font-family: var(--mono); font-size: 8.5px; font-weight: 300;
+  text-transform: uppercase; letter-spacing: 0.14em; flex: none;
+}
+.fullscreen-toggle:hover { background: none; color: var(--cyan); }
+.fullscreen-toggle:focus-visible { outline: 1px solid var(--cyan); outline-offset: 3px; }
+.fullscreen-toggle .fs-exit { display: none; }
+.fullscreen-toggle[aria-pressed="true"] { color: var(--cyan); }
+.fullscreen-toggle[aria-pressed="true"] .fs-enter { display: none; }
+.fullscreen-toggle[aria-pressed="true"] .fs-exit { display: inline; }
+/* Browsers that cannot go full screen (an embedded frame, say) get no dead button. */
+.fullscreen-toggle[hidden] { display: none; }
+
 #hud { display: flex; gap: 22px; margin: 0 0 0 auto; align-items: baseline; }
 #hud > div { display: flex; flex-direction: column; gap: 2px; text-align: right; }
 #hud dt { font-size: 8.5px; color: var(--dim); }
@@ -677,6 +694,7 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
   :root { --chat: 300px; }
   #views { margin-left: 4px; }
   #hud { display: none; }
+  .fullscreen-label { display: none; }
 }
 
 @media (max-width: 900px) {

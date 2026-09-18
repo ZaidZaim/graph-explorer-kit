@@ -16,7 +16,7 @@
  * back to a built-in canvas renderer so the demo still works.
  */
 
-import { createRenderer } from '/static/renderer.js?v=5';
+import { createRenderer } from '/static/renderer.js?v=6';
 
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
@@ -47,6 +47,39 @@ function applyTheme(theme, { persist = true } = {}) {
     try { localStorage.setItem(THEME_KEY, theme); } catch { /* storage blocked */ }
   }
   state.renderer?.setTheme?.();
+}
+
+/* ---------- full screen ---------- */
+
+/** Demo mode. The Fullscreen API needs a user gesture, so this only ever runs
+ *  from the button or the F key; the browser handles Esc itself, and the
+ *  `fullscreenchange` event keeps the button honest either way. */
+function toggleFullscreen() {
+  if (document.fullscreenElement) {
+    document.exitFullscreen?.();
+  } else {
+    document.documentElement.requestFullscreen?.({ navigationUI: 'hide' }).catch(() => {});
+  }
+}
+
+function syncFullscreenButton() {
+  const button = $('fullscreen-toggle');
+  const on = Boolean(document.fullscreenElement);
+  button.setAttribute('aria-pressed', String(on));
+  button.setAttribute('aria-label', on ? 'Exit full screen' : 'Enter full screen');
+  button.title = on ? 'Exit full screen (F or Esc)' : 'Full screen (F)';
+}
+
+function wireFullscreen() {
+  const button = $('fullscreen-toggle');
+  if (!document.fullscreenEnabled) { button.hidden = true; return; }
+  button.addEventListener('click', toggleFullscreen);
+  document.addEventListener('fullscreenchange', () => {
+    syncFullscreenButton();
+    // The viewport changes size without a resize event in some browsers.
+    syncInsets();
+  });
+  syncFullscreenButton();
 }
 
 function wireTheme() {
@@ -116,6 +149,7 @@ const state = {
 
 async function boot() {
   wireTheme();
+  wireFullscreen();
   try {
     setLoading('Reading graph metadata…');
     state.meta = await api('/api/meta');
@@ -1084,6 +1118,12 @@ function wireEvents() {
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { hideDetails(); $('search-results').hidden = true; }
+    // F for full screen, unless the reader is typing.
+    const typing = /^(INPUT|TEXTAREA|SELECT)$/.test(e.target?.tagName ?? '') || e.target?.isContentEditable;
+    if ((e.key === 'f' || e.key === 'F') && !typing && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      e.preventDefault();
+      toggleFullscreen();
+    }
   });
 }
 

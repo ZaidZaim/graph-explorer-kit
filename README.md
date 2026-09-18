@@ -264,6 +264,9 @@ Three views over the one graph, switched in the masthead:
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
+- **Full screen for demos.** The control in the masthead, or the F key, puts
+  the explorer on the whole display, so the browser's address bar and the OS
+  taskbar leave the stage. Esc brings them back.
 - **The question, the answer and the example prompts share one chat column**
   to the right of the graph: the answer at the top, filling the column and
   scrolling, the example prompts above the input, and the input pinned to the
