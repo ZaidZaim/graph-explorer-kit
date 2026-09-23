@@ -105,16 +105,17 @@ allowed patterns, and the extractor may not invent a fourteenth.
 
 ## What is in the graph
 
-As of the full-corpus ingest on 23 September 2026: 216 of the 240 released
-PDFs, 30,987 records across 17 labels, 32,262 relationships between them, and a
-lexical layer of 14,544 passages from 221 source files — the 10 Document
-Intelligence built from, plus 211 this project prepared and ingested itself.
-The last 24, the largest scans, were still extracting when these numbers were
-taken. The prepared corpus is 10,214 pages: 6,759 read from a text layer, 1,499
+After the full-corpus ingest on 23 September 2026: all 240 released PDFs,
+54,044 records across 17 labels, 58,429 relationships between them, and a
+lexical layer of 24,971 passages from 245 source files — the 10 Document
+Intelligence built from, plus 235 this project prepared and ingested itself.
+The prepared corpus is 10,214 pages: 6,759 read from a text layer, 1,499
 recognised by OCR, 1,956 judged illegible (blank pages, fully redacted pages,
-photographs, and scans too degraded to read). `Claim` and `Document` are the
-largest labels, which is what a corpus of records asserting things should look
-like; `USCENTCOM`, `AARO`, `Air Force` and `NASA` are the most connected nodes.
+photographs, and scans too degraded to read). 4,240 events carry a date.
+`Person` (7,973), `Event` (6,744), `Claim` (6,714) and `Document` (6,600) are
+the largest labels, which is what a corpus of records asserting things should
+look like; `FBI`, `Air Force`, `USCENTCOM`, `NASA` and `AARO` are the most
+connected nodes.
 
 ## From 240 PDFs to one graph
 
