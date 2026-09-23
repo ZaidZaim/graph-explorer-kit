@@ -1,0 +1,41 @@
+# Historical Document: DOW-UAP-D52-Email-Correspondance-NA-August-2024
+
+## Source Metadata
+
+- Original file: `DOW-UAP-D52-Email-Correspondance-NA-August-2024.pdf`
+- Pages: 2 (2 from text layer, 0 OCR, 0 illegible)
+- OCR language: `eng`
+- Processed at: `2026-09-23T17:44:00.577980+00:00`
+- Processing pipeline: `pypdfium2 text layer → Markdown → neo4j-graphrag SimpleKGPipeline`
+
+## Text
+
+[Page 1]
+(b) (6)
+CLASSIFICATION: SECRET//NOFORN
+Good morning,
+Below is the requested additional information (include the year) to the
+UNCLASS tear line.
+Let us know if you have any questions, comments or concerns.
+v/r
+(b) (6)
+PAROC Intel Data Analysis Technician
+15 AF / DET 1
+(b) (6) //UNCLASSIFIED//
+31 OCT 24, U.S Aircraft observed a possible UAP. It appeared to be oval/orb
+1
+
+[Page 2]
+shaped, likely moving at a low speed. The U.S Aircraft had eyes on the poss
+UAP for over 2 hours.
+//UNCLASSIFIED//
+(b) (6) CLASSIFICATION: SECRET//NOFORN
+Hello,
+Could you please approve the use of the year this incident took place?
+Currently you have approved the month and the day, we request it includes
+the year.
+Thank for your assistance.
+V/r
+(b) (6)
+Information Disclosure Analyst
+2

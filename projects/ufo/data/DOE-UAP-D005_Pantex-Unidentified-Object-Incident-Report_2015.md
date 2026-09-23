@@ -1,0 +1,162 @@
+# Historical Document: DOE-UAP-D005_Pantex-Unidentified-Object-Incident-Report_2015
+
+## Source Metadata
+
+- Original file: `DOE-UAP-D005_Pantex-Unidentified-Object-Incident-Report_2015.pdf`
+- Pages: 7 (4 from text layer, 2 OCR, 1 illegible)
+- OCR language: `eng`
+- Processed at: `2026-09-23T17:44:34.327507+00:00`
+- Processing pipeline: `pypdfium2 text layer + Tesseract OCR → Markdown → neo4j-graphrag SimpleKGPipeline`
+
+## Text
+
+[Page 1]
+Office 806.477.3918
+Fax 806.477.5690
+~SEP ,0 92015
+for
+Deputy
+Safeguards
+Assistant
+·
+&
+Manager
+Security
+-
+NNSA Production Office
+Post Office Box 2050
+Oak Ridge. Tennessee 37831-8009
+Dear- :
+Pantex Unidentified Object Report
+Enclosed for your review is the complete report for the Pantex Unidentified Object that occurred on
+September 2, 2015. If you have any questions a concerns, please contact me at or
+at - .
+Sincerely yours,
+. , tex
+Pantex SS&ES Operations
+GDW:~v
+Endosure: As stated
+c/enc:
+Document transmitted herewith
+contains UCNI.
+When separated from
+attachments. hand le this
+doct.ment as Unclassified.
+lNCI.ASSUU:I) (:O!\'TROI.U:ll ~l CLF.AR
+INFOR~l\TIO~ SOT FOR PUBLIC RELEASE
+Unaithonad disscmu,a1KIi subj«t to civil and cnm tal sancuons under :.a:li11n 148 of the: A10m1c Energy Act of 19S4. a.s amended
+(42 USC 2163)
+Hev1ewiniOfficiat - oatc: September 8, 201 s
+liuidancc Used· Cu-SS-4, Sept 2000.Chg, 7 HO 0C
+SS&ES-1 5-15095144230-SS&ES
+Unclassified Controlled Nuclear Information
+
+[Page 2]
+ParrrEX/ UCNI
+Pantex Unidentified Object
+Incident Report
+Septembe.- 2, 2015
+Pantex Plant
+Amarillo, TX 79120-0020
+UNCLASSIFIED CONTROLLED NUCLEAR INFORNMATION
+NOT FO'R PUSLIC RELEASE
+Unauthorized dlssemlncttlon subject t<> clvll and criminal ~nctions under
+Section 148 ofthe Atomic Energy Act of 1954, as amended (42 US.C 2168}
+Reviewing Official: PT>! VA
+oate: 9.L212Q1s
+Guidance Used: CG-SS-4. 9/2000 Chg. 7. 0OE OC
+UCNI
+
+[Page 3]
+Pal1TEX/ UCNT
+M lfli90(t - 0,,.r•""'1 •1>'
+Con>06dat•<I Nucl•• s«i ,nty. llC Pantex Unidentified Object Incident Report
+On September 1, 2015 at approximately 0710 hours, the Pantex Ground Surveillance Radar
+(GSR) detection system identified an unknown object flying in a non-threatening manner west
+of Pantex facilities in a northerly trajectory. The Protective Force (PF) responded in accordance
+with the NPO approved ~curity Incident Response to Unmanned Aerial Systems (UAS} plan. The
+object was initially identified just north of Highway 60 and was traveling in a northerly
+trajectory approximately 10-lSmph. PF personnel were alerted to the object and subsequently
+dispatched to follow it in an effort to obtain as much information about the object as possible.
+PF personnel on the ground confirmed the presence ofthe object and maintained observation
+via PF vehicle. PF personnel followed the object for several miles north of the plant until itwas
+no longer visible. All plant pedestrian and vehicle gates leading into and out of security areas
+were immediately secured upon identification of an unknown object by the GSR. Furthermore,
+PF patrols moved to a position to ensure the protection of assets.
+A subsequent comprehensive review of the incident was immediately initiated. The following
+text describes actlons taken by Central Alarm Station (CAS) and Secondary Alarm Station (SAS)
+GSR operators, PF officers and Security Police Officers (SPOs) during the event.
+At approximately 0708 hours, the an object
+approximately 1.75 miles SW of Z-12 South traveling at 10-15 mph (see map below titled,
+Ground Surveillance Radar Tracks). Several other radar hits were received as the object
+traversed to the NNW. to attempt to locate the object and
+report its position and direction of travel. A PF lieutenant (Lt.) and SPO in the area spotted the
+object and followed it as it traveled north. The Lt. and SPO attempted to intercept the object as
+it traveled over Pantex Drive in an attempt to view the object directly from below. Although
+they were unable to catch up to the object, they stopped their vehicle and got out. Once
+outside, they noted that the object did not make any sound. Furthermore, the Lt. and SPO
+stated that they were unable to identify any type of propulsion system on the object while
+using binocuJars to assess the object. After viewing it for 1-2 minutes, the object then
+continued north offsite. The Lt. and SPO then followed the object for several miles north of
+Pantex before they lost the object due to lack of roadway access. The location where the object
+was last seen was near County Road G and F.M. 1342. The Carson County Sherriff's office was
+notified when the object began to tr.averse off-site and requested to respond to the area and
+assist in locating the object. A Sherriff's Deputy met the Lt. and SPO at the point where the
+object was last 'Seen. The Deputy stated that he did not see the object but would perform a
+search in the area for anything unusual. It was noted that the object seemed to increase in
+speed and changed direction as it was being followed. The last known direct of the object was
+that it was heading in an ENE direction. The Lt. and SPO were debriefed upon their return to the
+UCNI Page 2 of 6
+
+[Page 4]
+UCNI PanrEX
+~•ndO!,.,•tedbr
+(Gn$Olod~ltd N\lCln• S,w.,ty UC Pantex Unidentified Object Incident Report
+plant. Their perspective of the object was that it was a "diamond" type shape with it being
+more round at the top.
+Security Police Officers in a Bearcat with a Common Remotely Operated Weapon System
+(CROWS) unit were also able to locate and track the object via CROWS camera as it traversed
+the plant. The SPOs stated that it was 100-200 ft. above the ground and they were able to track
+the object for 3-5 minutes. The SPOs location was approximately 75-100 meters from the
+object.
+Other PF personnel that observed the object, including a SPO that was viewing the object
+through binoculars described it as being approximately 4 ft. tall and 2 ft. wide at the bottom.
+The object was also described as being thinner at the top. However, there were some
+discrepancies in the color of the object. Some personnel stated that it was black in color while
+others noted that it appeared to be silver, red and blue.
+Video was obtained from the GSR tower that was closest to the object and subsequently sent to
+Sandia National labs for further study (see image below titled, Image from Ground Surveillance
+Radar Tower). The video does not provide much detail of the object due to the distance of the
+object to the GSR tower. It should be noted that at no time did the object appear to be
+threatening in nature nor did it come to close proximity to any sensitive assets. The object
+remained over open unpopulated areas ofthe plant priorto it proceeding offsite. All evidence
+ofthe incident {i.e. statements, video, etc.) were turned over to FBI agent
+UCNl Page 3 of6
+
+[Page 5: illegible]
+
+[Page 6]
+Rm aman ae
+PanreEx- a
+Managed and Operated by
+
+i ia Pantex Unidentified Object Incident Report
+
+Image from Ground Surveillance Radar Tower
+Ce
+|
+
+a
+
+¢
+
+est Page 5 of 6
+
+[Page 7]
+Parmrex- si
+Managed and Operated ty
+Sereeiettas reas Sean ie Pantex Unidentified Object Incident Report
+Sandia National Labs Enhanced Images of the Object
+=
+|
+eet Page 6 of 6

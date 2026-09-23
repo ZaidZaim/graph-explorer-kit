@@ -1,6 +1,8 @@
-The UAP corpus lives in the Aura instance, not in the repository: the graph was
-built with Neo4j Document Intelligence from the released PDFs, and this project
-adopts it rather than rebuilding it.
+The prepared corpus: one Markdown file per PDF in the war.gov/ufo release, as
+`graphrag-prepare` wrote it — the text layer where it was trustworthy, Tesseract
+OCR where it was not, and a header on each file saying which pages went which
+way. It is committed so the graph can be rebuilt with `graphrag-ingest` without
+the 4 GB of PDFs or an OCR install.
 
-Put .md or .pdf files here to ingest them with `graphrag-ingest`. Documents added
-through the explorer are ingested from a temporary path and are not kept here.
+Documents added through the explorer are ingested from a temporary path and are
+not kept here.
