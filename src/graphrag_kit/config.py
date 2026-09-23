@@ -44,6 +44,7 @@ def lexical():
 
     return load_project().lexical
 
+
 #: Scope for Entra tokens against Foundry / Azure OpenAI endpoints.
 AZURE_COGNITIVE_SCOPE = "https://cognitiveservices.azure.com/.default"
 DEFAULT_AZURE_API_VERSION = "2024-10-21"
@@ -215,6 +216,22 @@ def _model_params(temperature: float | None) -> dict:
     return {"temperature": temperature}
 
 
+def rate_limit_handler():
+    """How model calls wait out a 429.
+
+    neo4j-graphrag's default gives up after three attempts, a minute apart at
+    most. On a batch ingest that fans out over hundreds of chunks, a burst of
+    429s outlasts that and surfaces as a whole document failed for a reason that
+    has nothing to do with the document. Eight attempts with the backoff capped
+    at two minutes rides out any burst a deployment's quota produces;
+    LLM_RATE_LIMIT_ATTEMPTS overrides the count.
+    """
+    from neo4j_graphrag.utils.rate_limit import RetryRateLimitHandler
+
+    attempts = int(os.getenv("LLM_RATE_LIMIT_ATTEMPTS", "8"))
+    return RetryRateLimitHandler(max_attempts=attempts, min_wait=2.0, max_wait=120.0)
+
+
 def get_llm(temperature: float | None = None) -> LLMInterface:
     """Chat model used for entity extraction, answering, and text2cypher."""
     params = _model_params(temperature)
@@ -224,6 +241,7 @@ def get_llm(temperature: float | None = None) -> LLMInterface:
         return AzureOpenAILLM(
             model_name=_require("AZURE_OPENAI_CHAT_DEPLOYMENT"),
             model_params=params,
+            rate_limit_handler=rate_limit_handler(),
             **_azure_client_kwargs(),
         )
 
@@ -231,7 +249,9 @@ def get_llm(temperature: float | None = None) -> LLMInterface:
 
     _require("OPENAI_API_KEY")
     return OpenAILLM(
-        model_name=os.getenv("LLM_MODEL", "gpt-4.1-mini"), model_params=params
+        model_name=os.getenv("LLM_MODEL", "gpt-4.1-mini"),
+        model_params=params,
+        rate_limit_handler=rate_limit_handler(),
     )
 
 
@@ -243,6 +263,7 @@ def get_embedder() -> Embedder:
         return AzureOpenAIEmbeddings(
             # For Azure this is the deployment name, not the model name.
             model=_require("AZURE_OPENAI_EMBEDDING_DEPLOYMENT"),
+            rate_limit_handler=rate_limit_handler(),
             **_azure_client_kwargs("embedding"),
         )
 

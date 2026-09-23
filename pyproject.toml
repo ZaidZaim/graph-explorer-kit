@@ -27,10 +27,15 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["ruff>=0.9.0", "pytest>=8.3.0"]
+ocr = [
+    "pillow>=10",
+    "pypdfium2>=4.30",
+]
 
 [project.scripts]
 graphrag-setup = "graphrag_kit.setup_indexes:main"
 graphrag-adopt = "graphrag_kit.adopt:main"
+graphrag-prepare = "graphrag_kit.prepare:main"
 graphrag-ingest = "graphrag_kit.ingest:main"
 graphrag-ask = "graphrag_kit.ask:main"
 graphrag-agent = "graphrag_kit.agent:main"

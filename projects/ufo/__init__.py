@@ -128,6 +128,22 @@ PROJECT = ProjectSpec(
     # kept same-named records apart where the documents did, and a global
     # exact-name merge would silently destroy that — irreversibly.
     owns_graph=False,
+    # Across documents, only these carry identity in their name. An Event or a
+    # UAP_Object is named by description — "Reported object sighting", "the
+    # object" — and the same description in two files is two records; a Claim
+    # is its text; a Document entity titled "Mission Narrative" recurs in every
+    # mission report and is a different narrative each time.
+    cross_document_labels=(
+        "Agency",
+        "Location",
+        "Facility",
+        "Person",
+        "Witness",
+        "Vehicle",
+        "Sensor",
+        "Release",
+        "CaseFile",
+    ),
     lexical=LexicalSpec(
         # Document Intelligence embedded these chunks with a 3072-dim model of its
         # own, under `embedding`, with a vector index already on it. That index is

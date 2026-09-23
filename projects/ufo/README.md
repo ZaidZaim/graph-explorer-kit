@@ -2,10 +2,11 @@
 
 A GraphRAG demo over the UAP records released by the US Department of War under
 PURSUE (Presidential Unsealing and Reporting System for UAP Encounters). The
-graph was first built with **Neo4j Document Intelligence** from the released
-PDFs. This project puts the `neo4j-graphrag` engine on top of it: a schema view,
-graph retrieval, an agent that picks its own tools, and ingestion for documents
-added later.
+graph was first built with **Neo4j Document Intelligence** from five of the
+released PDFs. This project puts the `neo4j-graphrag` engine on top of it — a
+schema view, graph retrieval, an agent that picks its own tools — and then
+extends it with the rest of the release: all 240 PDFs, OCR'd where they are
+scans, ingested under the same POLE schema and resolved into one graph.
 
 ```bash
 GRAPHRAG_PROJECT=projects.ufo
@@ -104,8 +105,39 @@ allowed patterns, and the extractor may not invent a fourteenth.
 
 ## What is in the graph
 
-1,072 extracted records across 17 labels, 808 relationships between them, and a
-lexical layer of 78 passages from 10 source files.
+As of the full-corpus ingest on 23 September 2026: 216 of the 240 released
+PDFs, 30,987 records across 17 labels, 32,262 relationships between them, and a
+lexical layer of 14,544 passages from 221 source files — the 10 Document
+Intelligence built from, plus 211 this project prepared and ingested itself.
+The last 24, the largest scans, were still extracting when these numbers were
+taken. The prepared corpus is 10,214 pages: 6,759 read from a text layer, 1,499
+recognised by OCR, 1,956 judged illegible (blank pages, fully redacted pages,
+photographs, and scans too degraded to read). `Claim` and `Document` are the
+largest labels, which is what a corpus of records asserting things should look
+like; `USCENTCOM`, `AARO`, `Air Force` and `NASA` are the most connected nodes.
+
+## From 240 PDFs to one graph
+
+The release is 240 PDFs, 4.2 GB, 10,344 pages, and most of it is scans: FBI
+photostats of 1947 teletypes, Air Force incident summaries, NASA debriefing
+transcripts, contractor reports. Three things about them decided the shape of
+the pipeline in [prepare.py](../../src/graphrag_kit/prepare.py):
+
+- **Many are photographic negatives** — white type on a dark ground. Tesseract
+  reads nothing from them until the page is inverted, and nothing with its
+  default global threshold; local (Sauvola) thresholding is what makes a grey,
+  unevenly lit photostat legible.
+- **Some carry a text layer that is itself bad OCR.** The FBI `62-HQ-83894`
+  sections and the 173-233 incident summaries look born-digital to a file-level
+  check and read as character salad. Every page is graded on its own, and a
+  failing page is re-read from the image.
+- **OCR of noise looks like words.** A halftone photograph comes back as `ee bd
+  ane Cee vere Ser`, which passes any token-shape test. A page has to score
+  against a word list too, or the extractor mints an `Agency` called "Ser".
+
+What that buys is provenance you can read: every source file's header says how
+many of its pages were read, recognised, or given up on, and the extractor was
+only ever shown text that reads as text.
 
 ## Running it
 
@@ -119,10 +151,25 @@ The embedding model must be the one the chunks were embedded with — see
 
 ```bash
 graphrag-adopt --dry-run    # report what adoption would change, write nothing
-graphrag-adopt              # label the chunks, embed them, name the sources
+graphrag-adopt --relax-constraints   # label the chunks, embed them, name the sources
 graphrag-setup              # create the vector, fulltext and range indexes
 graphrag-serve              # the explorer on http://127.0.0.1:8000
 ```
+
+That reads the graph Document Intelligence built. To rebuild the full corpus
+on top of it — the step described under **From 240 PDFs to one graph** — with
+the PDFs downloaded from war.gov/ufo into a folder:
+
+```bash
+uv sync --extra ocr                                     # pypdfium2 + Pillow; Tesseract separately
+graphrag-prepare ~/Downloads/us-ufo-docs                # PDFs -> projects/ufo/data/*.md
+graphrag-ingest --skip-ingested --continue-on-error --parallel 3 --no-resolve
+graphrag-ingest --resolve-only --resolve-scope document  # merge duplicates within each new file
+graphrag-ingest --resolve-only --resolve-scope project   # then agencies, places and people across them
+```
+
+The prepared Markdown is committed under `data/`, so the ingest steps run
+without the 4 GB of PDFs or an OCR install.
 
 Ask from the terminal instead:
 
@@ -239,6 +286,22 @@ two places: entity resolution after an ingest is confined by a `filter_query` to
 entities reachable from the document just ingested, and `graphrag-reset` refuses
 to run at all without an explicit extra flag.
 
+Across the 235 documents this project ingested itself, resolution runs wider,
+but not indiscriminately. `cross_document_labels` names the labels whose name
+is an identity — `Agency`, `Location`, `Facility`, `Person`, `Witness`,
+`Vehicle`, `Sensor`, `Release`, `CaseFile` — and only those merge between
+documents; an `Event` called "Reported object sighting" or a `UAP_Object`
+called "the object" is a fresh record in every file that uses the phrase, and
+a `Document` entity titled "Mission Narrative" is a different narrative in each
+mission report. And `[REDACTED]`, the name the extraction rules assign to a
+withheld witness, is never merged anywhere: before that rule, the corpus held
+forty-eight redacted witnesses across fifteen files that an exact-name merge
+would have made one person. Document Intelligence's own records are outside
+every scope; the thirteen agency names the new documents share with them
+("FBI", "CIA", …) remain separate nodes, which is a policy choice rather than
+an accident and easy to reverse with one Cypher statement if you want them
+joined.
+
 ## What this demo does not claim
 
 Nothing here asserts that anything is of extraterrestrial origin, and nothing
@@ -280,7 +343,7 @@ onwards, and the graph shows it. Worth knowing before a demo:
 |---|---|
 | `__init__.py` | The `ProjectSpec`: POLE groups, palette, extraction rules, seed questions, few-shot Cypher, and the `LexicalSpec` that maps DI's naming |
 | `schema.py` | The 17 node types, 13 relationship types and 30 patterns, written against the live graph |
-| `data/` | Empty. The corpus lives in the Aura instance; documents added through the explorer are ingested from a temporary path and not kept here |
+| `data/` | The prepared corpus: one Markdown file per released PDF, as `graphrag-prepare` wrote it — text layer where trustworthy, Tesseract OCR where not, a header saying which. Documents added through the explorer are ingested from a temporary path and not kept here |
 
 ## Source
 

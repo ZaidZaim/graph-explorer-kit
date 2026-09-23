@@ -164,6 +164,12 @@ Fill in `GRAPHRAG_PROJECT`, the `NEO4J_*` values, and the provider block.
 uv sync
 ```
 
+Add `--extra ocr` if the corpus is PDFs that are scans rather than born-digital —
+see `graphrag-prepare` under **Run**. That pulls in `pypdfium2` and Pillow for
+rendering pages; the OCR engine itself is [Tesseract](https://github.com/tesseract-ocr/tesseract),
+installed separately (`winget install UB-Mannheim.TesseractOCR`, `apt install
+tesseract-ocr`, `brew install tesseract`) and found on PATH or via `TESSERACT_CMD`.
+
 ## Run
 
 ```bash
@@ -183,18 +189,57 @@ blocks until all of them report `ONLINE`. Every label and property it indexes
 comes from the project's `lexical` spec.
 
 ```bash
+uv run graphrag-prepare ~/Downloads/some-release/
+```
+
+Optional, for a corpus of scanned PDFs. Writes one Markdown file per PDF into the
+project's data directory, reading each *page* from its text layer where that layer
+is trustworthy and OCR-ing it with Tesseract where it is missing or is a previous
+pass's character salad. Photographic negatives (white type on a dark ground) are
+inverted first. A page whose reading is noise shaped like words — OCR of a
+halftone photograph, say — is recorded as illegible rather than handed to the
+extractor, judged against a word list. The header of each file records how many
+pages went which way. Files already prepared are skipped, so it is safe to
+re-run on a folder that has grown; `--force` redoes them, `--force-ocr` ignores
+text layers altogether, and `--regrade` re-applies the word-list gate to
+Markdown prepared earlier without touching the PDFs. See
+[prepare.py](src/graphrag_kit/prepare.py) for why this is a corpus step rather
+than something the pipeline does on the fly.
+
+```bash
 uv run graphrag-ingest
 ```
 
 Chunks every document in the project's data directory, embeds each chunk, extracts
 entities and relationships under the project's schema, rolls up evidence levels,
 then merges duplicate entities. `.md`, `.markdown` and `.pdf` are picked up,
-recursively — those are what the pipeline's default file loader can read, and it
-raises on anything else rather than ingesting it to nothing.
+recursively. PDFs go through the same page-by-page reader as `graphrag-prepare`,
+so a scan dropped straight on the pipeline — or on the explorer's **Extend the
+graph** — is OCR'd rather than ingested to nothing; without the `ocr` extra it
+falls back to pypdf's text layer.
 
 Name files explicitly to ingest only those — `uv run graphrag-ingest data/one-new-note.md`
 — and pass `--no-resolve` to skip the duplicate-entity merge, which is what you want
 while you are still iterating on `extraction_rules`.
+
+For a corpus of hundreds of files the same command is a batch runner:
+
+```bash
+uv run graphrag-ingest --skip-ingested --continue-on-error --parallel 3 --no-resolve
+uv run graphrag-ingest --resolve-only --resolve-scope project
+```
+
+`--skip-ingested` leaves out any file whose name is already a source in the graph,
+which makes an interrupted run resumable. `--continue-on-error` reports a failing
+document at the end instead of stopping, after removing whatever it half-wrote so
+the next run picks it up again. `--lenient` goes one level finer: a chunk the
+model answers with malformed JSON is logged and skipped rather than failing its
+file, which on a 400-chunk scan is the difference between losing one passage and
+losing the document. `--parallel N` extracts N documents at once, each
+already fanning out over its chunks; two or three is plenty against one
+deployment's quota. Files are taken smallest first, so most of a corpus is in the
+graph early. Resolution is then run once, at the end, over everything — see
+**Entity resolution** for what `--resolve-scope project` means on an adopted graph.
 
 ```bash
 uv run graphrag-serve
@@ -471,6 +516,29 @@ on purpose — several distinct sightings each named "Fireball sighting" — and
 reachable from the document just ingested. Duplicates *within* the new document
 still merge; nothing outside it is touched.
 
+That default scope is one run's files. A corpus ingested in several sittings
+needs two more, both run afterwards with `--resolve-only`. `--resolve-scope
+document` takes every file this project ingested one at a time — the pass a
+batch run with `--no-resolve` skipped. `--resolve-scope project` then takes all
+of them together, so the agency named in Tuesday's batch and again in
+Wednesday's becomes one node — and still never touches the records the adopted
+tool wrote.
+
+Two things in the `ProjectSpec` keep exact-name merging from doing damage:
+
+- **`placeholder_names`** (`[REDACTED]`, `[ILLEGIBLE]`, `unknown`, …) are never
+  merged, in any scope. The extraction rules produce them on purpose for
+  withheld names, and forty-eight redacted witnesses are forty-eight people,
+  not one. Compared case-insensitively.
+- **`cross_document_labels`** lists the labels whose name is an identity —
+  agencies, places, named people — and only those merge *across* documents.
+  An Event named "Reported object sighting" or a UAP_Object named "the object"
+  recurs in every file and is a different record each time. Cross-document
+  merges also require a capital letter or a digit in the name, so "USCENTCOM"
+  and "SU-27" merge while "radar" and "vehicle" stay apart. Within one
+  document neither rule applies: the extractor was reading one text, and a
+  repeated name there is one thing. `None` (the default) means every label.
+
 The same flag makes `graphrag-reset` refuse without
 `--i-know-this-graph-is-not-mine`, because "everything this demo created" is not a
 set that command can compute on a graph it did not create.
@@ -532,6 +600,13 @@ retriever span the lot. Reset between projects, or give each its own
   fixed width, and `graphrag-setup` is the only thing that creates it. Re-ingesting
   straight after a reset writes embeddings into a database with no vector index,
   which fails silently: retrieval just returns nothing.
+- **429s are retried eight times, not three.** neo4j-graphrag's default rate
+  limit handler gives up after three attempts, which a batch ingest fanning out
+  over hundreds of chunks outlasts; the symptom is a whole document reported as
+  failed with a `RetryError`. `get_llm` and `get_embedder` install a handler
+  with eight attempts and a two-minute backoff cap; `LLM_RATE_LIMIT_ATTEMPTS`
+  changes the count. Two batches against one deployment still add up: run one
+  at a time.
 - **Temperature is opt-in.** Newer reasoning models (`gpt-5-mini` and friends)
   reject any temperature other than their default and return HTTP 400, so nothing
   is sent unless you set `LLM_TEMPERATURE`.
@@ -599,6 +674,7 @@ src/graphrag_kit/
   cypher.py           Cypher fragments built from the project spec
   setup_indexes.py    indexes + ONLINE polling       -> graphrag-setup
   adopt.py            read a graph built elsewhere   -> graphrag-adopt
+  prepare.py          PDFs -> Markdown, OCR fallback -> graphrag-prepare
   ingest.py           SimpleKGPipeline + rollup      -> graphrag-ingest
   retrievers.py       five retrievers, retrieval_query, RAG prompt
   ask.py              terminal client                -> graphrag-ask
