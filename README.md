@@ -353,15 +353,18 @@ Three views over the one graph, switched in the masthead:
 
 | View | What it shows |
 |---|---|
-| **Graph** | Opens on `Records`: the real graph, most connected records first, up to a limit set in the rail (200 to 3,000; default 400), with the true total alongside. Click a record for its details; double-click it, or press `expand`, and its connections grow out of it in place, the way Aura expands a node. `Types` rolls the same graph up to one node per label with weighted edges; click a type for its most connected records, then a record for itself and its neighbours. |
+| **Graph** | Opens on `Records`: the real graph, up to a limit set in the rail (200 to 3,000; default 400), with the true total alongside. The budget is shared out by type — each type's most connected records, then the neighbours that tie them together, no type above a fifth of the picture — so the spine of the model is what you see, not the one label with the most edges. Click a record for its details; double-click it, or press `expand`, and its connections grow out of it in place, the way Aura expands a node. `Types` rolls the same graph up to one node per label with weighted edges; click a type for its most connected records, then a record for itself and its neighbours. |
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
 - **Big graphs stay responsive.** A corpus of a few hundred documents extracts
   to tens of thousands of records, and a browser asked to lay out and draw all
   of them at once stops responding. So nothing ever asks it to: `/api/graph`
-  ranks by connectedness and returns the top `limit` records (default 400,
-  ceiling 6,000, `GRAPH_RENDER_LIMIT` to change the default), expansion pulls
+  returns at most `limit` records (default 400, ceiling 6,000,
+  `GRAPH_RENDER_LIMIT` to change the default), chosen to be a picture rather
+  than a sample — seats per type for the most connected records, the rest to
+  neighbours that tie the most of them together, no type above a fifth, and
+  nothing left without an edge on screen; expansion pulls
   in at most 60 neighbours per gesture, the drill-downs were always capped, and
   the timeline lists the 600 most connected dated records. Every capped view
   says what it cut — "400 of 40,079 records, most connected first", "+60 of
@@ -457,7 +460,7 @@ also the shortest path to putting your own front-end on the graph:
 | `GET /api/schema` | The project's schema **as a graph** — one node per type with its properties and live count, one edge per pattern. The model itself, queryable. |
 | `GET /api/overview?labels=` | The graph rolled up by type: one node per label, one weighted edge per (label, type, label) actually present. Unlike `/api/schema` this counts the data, so a pattern the schema allows but the corpus never uses does not appear. |
 | `GET /api/instances?label=&limit=` | The drill-down: that type's most connected records plus their neighbours, with the true total alongside. |
-| `GET /api/graph?labels=&status=&connected=&limit=` | The entity graph, comma-separated filters, most connected first up to `limit` (default 400, ceiling 6,000) with `shown` and `total` alongside. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
+| `GET /api/graph?labels=&status=&connected=&limit=` | The entity graph, comma-separated filters, up to `limit` records (default 400, ceiling 6,000) chosen type by type — each type's most connected, then the neighbours that tie them, no type above a fifth — with `shown` and `total` alongside. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
 | `GET /api/expand?id=&limit=` | One node, its most connected neighbours up to `limit` (default 60), and the edges among them, with `shown` and `total`. The unit of in-place expansion. |
 | `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. Terms are Lucene-escaped, so a half-typed query is a search rather than a 500. |
 | `GET /api/timeline?limit=` | The most connected entities carrying the project's `date_property`, in date order, with `shown` and `total`. |

@@ -500,47 +500,74 @@ def graph(
     survived a global cut.
 
     Which records make the cut decides whether the result is a picture or a
-    field of dust. The top-N by degree alone is dust: each hub's edges mostly
-    lead to records outside the top N, so four hundred hubs arrive with a few
-    hundred edges among them and no visible structure. Instead a tenth of the
-    budget goes to the most connected records as seeds, and the rest to the
-    neighbours that tie the most seeds together — so what is drawn is the
-    hubs *and* the web between them, which is the complexity worth showing.
+    field of dust — and of what. The top-N by degree alone is dust: each hub's
+    edges mostly lead to records outside the top N. Seeds plus the neighbours
+    that tie them together is a web, but a web of Documents, because in a
+    corpus of records the documents are what mention everything else, and by
+    degree they win every seat. So the budget is shared out by type: every
+    type present gets seats for its most connected records, the rest of the
+    budget goes to the neighbours that tie the most seeds together, and no
+    single type may take more than a fifth of the picture. What is drawn is
+    the spine of the model — events at places, observations of objects by
+    witnesses, agencies and the documents that name them — as a connected
+    graph, rather than the one label that happens to have the most edges.
     """
     project = spec()
     cap = max(1, min(limit or GRAPH_LIMIT, GRAPH_LIMIT_CEILING))
-    seed_count = max(8, cap // 10)
     wanted_labels = [x for x in (labels or "").split(",") if x] or project.labels
-    clauses = ["any(l IN labels(n) WHERE l IN $labels)"]
     params: dict[str, Any] = {"labels": wanted_labels}
-    if connected:
-        clauses.append("(n)-[]-(:__Entity__)")
     if project.grades_evidence:
         params["status"] = [x for x in (status or "").split(",") if x] or list(
             project.evidence_levels
         )
-        clauses.append(f"{evidence_expr('n', project)} IN $status")
+
+    def filters(var: str) -> list[str]:
+        """The view's filters as WHERE clauses on `var`, so the same filter can
+        be applied to a node and, later, to a neighbour under another name."""
+        out = [f"any(l IN labels({var}) WHERE l IN $labels)"]
+        if connected:
+            out.append(f"({var})-[]-(:__Entity__)")
+        if project.grades_evidence:
+            out.append(f"{evidence_expr(var, project)} IN $status")
+        return out
+
+    clauses = filters("n")
     total = run(
         f"MATCH (n:__Entity__) WHERE {' AND '.join(clauses)} RETURN count(n) AS c",
         **params,
     )[0]["c"]
     where = " AND ".join(clauses)
+    per_label_ceiling = max(8, cap // 5)
+    per_label_seeds = max(3, cap // (4 * max(1, len(wanted_labels))))
+    # Seeds: each type's most connected records, so every type present is in
+    # the picture from the start.
     seeds = run(
         f"""
         MATCH (n:__Entity__)
         WHERE {where}
-        WITH n, count {{ (n)-[]-(:__Entity__) }} AS degree
+        WITH n, {label_expr("n")} AS label, count {{ (n)-[]-(:__Entity__) }} AS degree
         ORDER BY degree DESC, n.name
-        LIMIT $seeds
-        RETURN elementId(n) AS id
+        WITH label, collect(elementId(n))[..$per_label] AS ids
+        UNWIND ids AS id
+        RETURN id, label
         """,
-        seeds=min(seed_count, cap),
+        per_label=per_label_seeds,
         **params,
     )
-    seed_ids = [r["id"] for r in seeds]
-    # The same filters apply to the neighbours (`n` is the variable the clauses
-    # name), so a view narrowed to Agencies draws agencies, not their documents.
-    neighbours = run(
+    taken: dict[str, int] = {}
+    ids: list[str] = []
+    for r in seeds:
+        if len(ids) >= cap:
+            break
+        ids.append(r["id"])
+        taken[r["label"]] = taken.get(r["label"], 0) + 1
+    # Fill: the neighbours that tie the most seeds together, best first, each
+    # type capped so the documents that mention everything cannot crowd out the
+    # records they mention. The same filters apply to the neighbours (`n` is
+    # the variable the clauses name), so a view narrowed to Agencies draws
+    # agencies, not their documents.
+    seed_ids = list(ids)
+    candidates = run(
         f"""
         MATCH (s:__Entity__) WHERE elementId(s) IN $seed_ids
         MATCH (s)-[]-(n:__Entity__)
@@ -548,13 +575,68 @@ def graph(
         WITH n, count(DISTINCT s) AS ties, count {{ (n)-[]-(:__Entity__) }} AS degree
         ORDER BY ties DESC, degree DESC, n.name
         LIMIT $limit
-        RETURN elementId(n) AS id
+        RETURN elementId(n) AS id, {label_expr("n")} AS label
         """,
         seed_ids=seed_ids,
-        limit=max(0, cap - len(seed_ids)),
+        limit=max(0, cap - len(seed_ids)) * 12,
         **params,
     )
-    ids = seed_ids + [r["id"] for r in neighbours]
+    # Two passes: with the ceiling, then — if seats are still empty because the
+    # pool was mostly one type — without it. A full picture of the corpus as
+    # it is beats an empty seat kept for a type that has nothing more to add.
+    chosen = set(ids)
+    for enforce_ceiling in (True, False):
+        for r in candidates:
+            if len(ids) >= cap:
+                break
+            if r["id"] in chosen:
+                continue
+            if enforce_ceiling and taken.get(r["label"], 0) >= per_label_ceiling:
+                continue
+            ids.append(r["id"])
+            chosen.add(r["id"])
+            taken[r["label"]] = taken.get(r["label"], 0) + 1
+    # A seed from a small type — a Release, a Redaction — may connect to nothing
+    # else on screen. Give each one its best neighbour while seats remain within
+    # the cap, and leave out whatever is still alone: a dot with no edge says
+    # nothing about a graph.
+    lonely = run(
+        """
+        MATCH (n:__Entity__) WHERE elementId(n) IN $ids
+        AND NOT EXISTS { (n)-[]-(m:__Entity__) WHERE elementId(m) IN $ids }
+        RETURN elementId(n) AS id
+        """,
+        ids=ids,
+    )
+    lonely_ids = [r["id"] for r in lonely]
+    if lonely_ids:
+        companions = run(
+            f"""
+            MATCH (n:__Entity__) WHERE elementId(n) IN $lonely
+            MATCH (n)-[]-(m:__Entity__)
+            WHERE NOT elementId(m) IN $ids AND {" AND ".join(filters("m"))}
+            WITH n, m, count {{ (m)-[]-(:__Entity__) }} AS degree
+            ORDER BY degree DESC
+            WITH n, head(collect(elementId(m))) AS best
+            RETURN elementId(n) AS id, best
+            """,
+            lonely=lonely_ids,
+            ids=ids,
+            **params,
+        )
+        rescued = set()
+        for r in companions:
+            if r["best"] is None:
+                continue
+            if r["best"] in chosen:
+                rescued.add(r["id"])
+                continue
+            if len(ids) >= cap:
+                break
+            ids.append(r["best"])
+            chosen.add(r["best"])
+            rescued.add(r["id"])
+        ids = [i for i in ids if i not in set(lonely_ids) - rescued]
     records = run(
         f"MATCH (n:__Entity__) WHERE elementId(n) IN $ids RETURN {node_projection()}",
         ids=ids,
