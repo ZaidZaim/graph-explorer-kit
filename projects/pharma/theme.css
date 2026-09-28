@@ -1,0 +1,151 @@
+/* Pharma Pipeline — the explorer in the idiom of a life-sciences R&D deck.
+
+   Loaded after the engine's styles.css, so everything here is an override of
+   its tokens plus a few rules for the pieces tokens cannot reach (the seal,
+   the masthead wash, the title). The canvas reads the same tokens, so the
+   graph follows. Per-entity node colours still come from the project's
+   palette.
+
+   The idiom: a deep lab-navy ground rather than the engine's near-black; a
+   mint-teal accent — the colour every pipeline chart uses for "approved" and
+   every results deck for "growth"; a second, violet tone in the masthead wash
+   for the clinical side of the story; a clean humanist sans for the chrome in
+   place of typewriter mono, with a real monospace kept for numbers. Corners
+   are softened: this is a boardroom document, not a records archive. */
+
+@import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@300;400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap");
+
+:root {
+  --bg:         #070C1A;
+  --bg-2:       #0A1122;
+  --mast-top:   #04070F;
+  --panel:      rgba(10, 17, 34, 0.84);
+  --panel-solid:#0A1122;
+  --rule:       rgba(45, 212, 191, 0.16);
+  --rule-soft:  rgba(214, 226, 240, 0.08);
+  --well:       rgba(0, 0, 0, 0.42);
+  --well-soft:  rgba(0, 0, 0, 0.26);
+  --well-faint: rgba(214, 226, 240, 0.02);
+  --text:       #D6E2F0;
+  --prose:      #FFFFFF;
+  --muted:      #8A9BB3;
+  --dim:        #5E6E86;
+  --placeholder:#45546C;
+  /* The accent token is named for the engine's default; here it is the mint. */
+  --cyan:       #2DD4BF;
+  --cyan-rgb:   45, 212, 191;
+  --cyan-deep:  #12564F;
+  --confirmed:  #34D399;
+  --reported:   #FBBF24;
+  --rumored:    #FB7185;
+  --scanline:   transparent;
+  --overlay:    rgba(7, 12, 26, 0.86);
+  --pill-text:  #04070F;
+  --shadow:     rgba(0, 0, 0, 0.6);
+  --ink-rgb:    190, 208, 230;
+  --ghost-fill: #141D33;
+  --label-text: #D6E2F0;
+  --label-emph: #FFFFFF;
+  --radius:     6px;
+  --mono:       "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --sans:       "IBM Plex Sans", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* The second tone, for the wash behind the masthead. */
+  --clinical:   #A78BFA;
+}
+
+:root[data-theme="light"] {
+  --bg:         #F5F8FC;
+  --bg-2:       #EBF0F7;
+  --mast-top:   #FFFFFF;
+  --panel:      rgba(255, 255, 255, 0.88);
+  --panel-solid:#FFFFFF;
+  --rule:       rgba(15, 118, 110, 0.24);
+  --rule-soft:  rgba(10, 22, 44, 0.09);
+  --well:       rgba(10, 22, 44, 0.05);
+  --well-soft:  rgba(10, 22, 44, 0.035);
+  --well-faint: rgba(10, 22, 44, 0.02);
+  --text:       #1B2638;
+  --prose:      #0B1424;
+  --muted:      #4A5B72;
+  --dim:        #7A8AA0;
+  --placeholder:#9AA8BB;
+  --cyan:       #0F766E;
+  --cyan-rgb:   15, 118, 110;
+  --cyan-deep:  #A7E3DB;
+  --confirmed:  #047857;
+  --reported:   #B45309;
+  --rumored:    #BE123C;
+  --overlay:    rgba(245, 248, 252, 0.88);
+  --pill-text:  #FFFFFF;
+  --shadow:     rgba(10, 22, 44, 0.16);
+  --ink-rgb:    56, 72, 96;
+  --ghost-fill: #D5DDE8;
+  --label-text: #1B2638;
+  --label-emph: #000000;
+  --clinical:   #6D4FD6;
+}
+
+/* Plex Sans carries the tracked chrome at a normal weight; the engine's
+   ultra-light 300 was tuned for a monospace and reads thin in a humanist face. */
+.chrome-label, .panel h2, .panel h3, #details h3, .hint, .field > span,
+#hud dt, .view-tab, .pill, .evidence, .group-line, #context-details summary,
+#sources-details summary, .stage-caption, .stage-line, .progress-steps li {
+  letter-spacing: 0.12em; font-weight: 500;
+}
+
+/* Numbers, identifiers and code want a real monospace. */
+#hud dd, .props dd, #answer-body code, #answer-context pre, .log-date {
+  font-family: "IBM Plex Mono", ui-monospace, Consolas, monospace;
+}
+
+/* ---------- masthead: a wash of the two tones ---------- */
+
+#masthead {
+  background:
+    radial-gradient(90% 200% at 12% -80%, rgba(45, 212, 191, 0.26) 0%, rgba(45, 212, 191, 0) 60%),
+    radial-gradient(70% 180% at 60% -90%, rgba(167, 139, 250, 0.20) 0%, rgba(167, 139, 250, 0) 60%),
+    linear-gradient(180deg, var(--mast-top) 0%, var(--bg) 100%);
+  border-bottom-color: rgba(45, 212, 191, 0.22);
+}
+:root[data-theme="light"] #masthead {
+  background:
+    radial-gradient(90% 200% at 12% -80%, rgba(15, 118, 110, 0.16) 0%, rgba(15, 118, 110, 0) 60%),
+    radial-gradient(70% 180% at 60% -90%, rgba(109, 79, 214, 0.12) 0%, rgba(109, 79, 214, 0) 60%),
+    linear-gradient(180deg, var(--mast-top) 0%, var(--bg) 100%);
+}
+
+.ident h1 {
+  font-weight: 600; font-size: 15px; letter-spacing: 0.3em;
+  background: linear-gradient(92deg, var(--cyan) 0%, var(--prose) 55%, var(--clinical) 100%);
+  -webkit-background-clip: text; background-clip: text; color: transparent;
+}
+.ident p { letter-spacing: 0.14em; }
+
+/* A hexagon, not a ring: the one shape every molecule diagram is drawn with.
+   Two nested hexagons in the accent, the inner one hollow — a benzene ring
+   read as a mark, and nothing that could be mistaken for a company logo. */
+.seal {
+  border: 0; border-radius: 0; opacity: 1;
+  background: var(--cyan);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+}
+.seal::after {
+  inset: 3px; border: 0; border-radius: 0;
+  background: var(--panel-solid);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+}
+.seal::before {
+  content: ''; position: absolute; inset: 8px; z-index: 1;
+  background: var(--cyan);
+  clip-path: polygon(50% 0%, 93% 25%, 93% 75%, 50% 100%, 7% 75%, 7% 25%);
+}
+
+.view-tab.is-active { border-radius: 999px; border-color: transparent; background: rgba(var(--cyan-rgb), 0.12); }
+.view-tab.is-active::after { display: none; }
+
+/* ---------- softened controls ---------- */
+
+button, .examples button, .segmented button, .view-tab { border-radius: 999px; }
+.segmented { border-radius: 999px; overflow: hidden; }
+input[type="search"], input[type="text"], select { border-radius: var(--radius); }

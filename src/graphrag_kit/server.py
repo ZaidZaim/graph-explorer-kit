@@ -327,6 +327,7 @@ def meta() -> dict:
         "colors": project.label_colors,
         "groups": {group: list(members) for group, members in project.groups.items()},
         "groupColors": project.group_colors,
+        "groupsTitle": project.groups_title,
         "retrievers": sorted(RETRIEVERS) + [AGENT_MODE],
         "counts": counts,
         "isolated": isolated,

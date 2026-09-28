@@ -35,10 +35,19 @@ from graphrag_kit.cypher import (
     evidence_expr,
     fact_expr,
     label_expr,
+    lucene_escape,
     name_expr,
     source_name_expr,
 )
 from graphrag_kit.project import ProjectSpec, load_project
+
+#: How many of one entity's relationships the graph context carries per chunk.
+#: A graph built by another tool can hold hub nodes — in the pharma corpus a
+#: single Evidence node stands for two hundred assertions — and expanding one
+#: without a cap puts two hundred near-identical lines into the prompt for
+#: every chunk that touches it, drowning the passage the question matched.
+#: Forty is more than any ordinary record has and far less than a hub.
+FACTS_PER_ENTITY = 40
 
 
 def graph_context_query(spec: ProjectSpec) -> str:
@@ -63,8 +72,14 @@ WITH node, score, doc, collect(DISTINCT entity) AS entities
 
 CALL (entities) {{
     UNWIND entities AS e
-    MATCH (e)-[rel]->(target:__Entity__)
-    RETURN collect(DISTINCT {fact_expr('e', 'rel', 'target', spec)}) AS facts
+    // Per entity, not per chunk: a hub is capped and its neighbours still
+    // get their full say.
+    CALL (e) {{
+        MATCH (e)-[rel]->(target:__Entity__)
+        RETURN {fact_expr('e', 'rel', 'target', spec)} AS fact
+        LIMIT {FACTS_PER_ENTITY}
+    }}
+    RETURN collect(DISTINCT fact) AS facts
 }}
 
 RETURN
@@ -131,9 +146,43 @@ def vector_retriever(driver: neo4j.Driver) -> VectorRetriever:
     )
 
 
+class _FulltextSafe:
+    """Escape the question before it reaches the fulltext index.
+
+    The library sends one `query_text` both to the embedder and to
+    `db.index.fulltext.queryNodes`, and Lucene reads the latter as a query
+    language: `/` opens a regular expression, an unmatched `(` or `"` is a
+    syntax error, and a question with "Phase I/II" or "R/R MCL" in it fails the
+    whole retrieval with a ProcedureCallFailed. Every corpus has such phrases —
+    "PD-1/PD-L1", "24/7", "and/or" — so this is not a pharma concern. The
+    embedder is given the question as typed, the index the same words with the
+    operators escaped; the analyser tokenises both alike.
+
+    A mixin over the library's classes rather than a wrapper around `search()`,
+    so `search()` — with its version check and result formatting — is untouched.
+    """
+
+    def get_search_results(self, query_text: str, query_vector=None, **kwargs):
+        if query_text and query_vector is None:
+            query_vector = self.embedder.embed_query(query_text)
+        return super().get_search_results(
+            query_text=lucene_escape(query_text) if query_text else query_text,
+            query_vector=query_vector,
+            **kwargs,
+        )
+
+
+class SafeHybridRetriever(_FulltextSafe, HybridRetriever):
+    pass
+
+
+class SafeHybridCypherRetriever(_FulltextSafe, HybridCypherRetriever):
+    pass
+
+
 def hybrid_retriever(driver: neo4j.Driver) -> HybridRetriever:
     """Vector + fulltext. Recovers proper nouns that embeddings blur together."""
-    return HybridRetriever(
+    return SafeHybridRetriever(
         driver=driver,
         vector_index_name=VECTOR_INDEX_NAME,
         fulltext_index_name=FULLTEXT_INDEX_NAME,
@@ -156,7 +205,7 @@ def vector_cypher_retriever(driver: neo4j.Driver) -> VectorCypherRetriever:
 
 def hybrid_cypher_retriever(driver: neo4j.Driver) -> HybridCypherRetriever:
     """Vector + fulltext, then graph expansion. The default."""
-    return HybridCypherRetriever(
+    return SafeHybridCypherRetriever(
         driver=driver,
         vector_index_name=VECTOR_INDEX_NAME,
         fulltext_index_name=FULLTEXT_INDEX_NAME,
@@ -260,7 +309,9 @@ def evidence_entity_ids(
         database_=get_database(),
         vector_index=VECTOR_INDEX_NAME,
         fulltext_index=FULLTEXT_INDEX_NAME,
-        question=question,
+        # The index gets the escaped question, the embedder the plain one —
+        # the same split the retrievers make.
+        question=lucene_escape(question),
         vector=embedder.embed_query(question),
         top_k=top_k,
     )

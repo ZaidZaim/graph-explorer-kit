@@ -134,6 +134,12 @@ class ProjectSpec:
     #: Colour per group.
     group_colors: dict[str, str] = field(default_factory=dict)
 
+    #: What the lens is called — the heading over the grouped filters and the
+    #: prefix on a record's group in the explorer. "POLE" for an intelligence
+    #: corpus, "Molecule to market" for a pharma pipeline; the engine has no
+    #: opinion.
+    groups_title: str = "Groups"
+
     #: Properties tried in order for an entity's display name.
     name_properties: tuple[str, ...] = ("name",)
 

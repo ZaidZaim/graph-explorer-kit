@@ -116,7 +116,7 @@ const CAPTIONS = {
   graphAll: 'The most connected records, up to the limit in the rail. Double-click a node to pull in its connections; click for details.',
   graphType: 'The most connected records of one type, with what they link to. Click one to open it.',
   graphRecord: 'One record and everything it links to, with each relationship named.',
-  schema: 'The POLE model this corpus is held to. Node size is how many records carry that type.',
+  schema: 'The model this corpus is held to. Node size is how many records carry that type.',
   timeline: 'Events carrying a date, earliest first. Dates are as precise as the document allowed.',
 };
 
@@ -308,7 +308,7 @@ function buildPoleFilters() {
   const grouped = Object.keys(state.meta.groups ?? {}).length > 0;
   const groups = grouped ? state.meta.groups : { '': state.meta.labels };
   $('pole-panel').querySelector('h2').firstChild.textContent =
-    grouped ? 'POLE ' : 'Entities ';
+    grouped ? `${state.meta.groupsTitle} ` : 'Entities ';
 
   for (const [group, labels] of Object.entries(groups)) {
     const total = labels.reduce((sum, l) => sum + (counts[l] ?? 0), 0);
@@ -620,7 +620,7 @@ async function showDetails(nodeId) {
 
   state.selected = nodeId;
   openDetails(node.label, state.meta.colors[node.label] ?? '#8894a8');
-  $('detail-group').textContent = node.group ? `POLE · ${node.group}` : '';
+  $('detail-group').textContent = node.group ? `${state.meta.groupsTitle} · ${node.group}` : '';
   $('detail-name').textContent = node.name;
 
   const ev = $('detail-status');
@@ -688,7 +688,7 @@ function showSchemaDetails(label) {
   if (!node) return;
   state.selected = label;
   openDetails(node.label, state.meta.colors[node.label] ?? '#8894a8');
-  $('detail-group').textContent = node.group ? `POLE · ${node.group}` : '';
+  $('detail-group').textContent = node.group ? `${state.meta.groupsTitle} · ${node.group}` : '';
   $('detail-name').textContent = node.label;
   $('detail-status').hidden = true;
   $('detail-description').textContent = node.description ?? '';

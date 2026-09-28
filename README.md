@@ -66,13 +66,17 @@ Three things fall out of storing knowledge this way:
   embedding and by keyword, then follows the graph out from them. You get the
   recall of vector search and the precision of a query in one call.
 
-Two projects show the range. `projects/example` is a fictional port-automation
-sector: four entity types, five relationships, and a corpus written so the
-interesting answers cross documents. `projects/ufo`, on the `ufo-documents`
-branch, is the US Department of War's released UAP records: 17 types under a
-POLE ontology, a graph another tool built, and a corpus whose whole difficulty
-is that it asserts things rather than states them. Each project's README
-explains its own ontology and why it's shaped the way it is.
+Three projects show the range. `projects/example` is a fictional
+port-automation sector: four entity types, five relationships, and a corpus
+written so the interesting answers cross documents. `projects/pharma` is four
+pharmaceutical companies' pipeline and results decks: 14 types under a
+molecule-to-market lens, a graph Neo4j Document Intelligence built, and
+questions — who else is working on this disease? — that only cross-document
+structure answers. `projects/ufo`, on the `ufo-documents` branch, is the US
+Department of War's released UAP records: 17 types under a POLE ontology, a
+graph another tool built, and a corpus whose whole difficulty is that it
+asserts things rather than states them. Each project's README explains its
+own ontology and why it's shaped the way it is.
 
 ## The split
 
@@ -94,7 +98,7 @@ Four optional parts of the spec carry more weight than their size suggests:
 
 | Field | What it buys |
 |---|---|
-| `groups` | A lens over the labels — POLE (Person, Object, Location, Event) in the `ufo-documents` branch, for example. The explorer groups its filters and colours its nodes by it, and serves the model itself as a view, so the model an analyst is taught is the model the picture shows. |
+| `groups` | A lens over the labels — POLE (Person, Object, Location, Event) in the `ufo-documents` branch, molecule-to-market in `projects/pharma`. The explorer groups its filters and colours its nodes by it, and serves the model itself as a view, so the model an analyst is taught is the model the picture shows. `groups_title` is what the explorer calls the lens. |
 | `name_properties` | Not every entity has a `name`. A Claim is identified by its text and a Document by its title, and a graph that renders both as "(unnamed)" is useless. |
 | `lexical` | How the chunk/embedding layer is *named*. The defaults are what `neo4j-graphrag` writes itself; overriding them lets the engine read a graph another tool built without rewriting anyone's data. See **Adopting an existing graph**. |
 | `theme_css` | A stylesheet of the project's own, loaded after the engine's. It overrides the design tokens, so a corpus can look like its subject while the engine stays neutral. See `projects/vicecity/theme.css` on the `vice-city` branch. |
@@ -763,4 +767,5 @@ src/graphrag_kit/
   static/             explorer front-end (no build step)
 projects/
   example/            neutral sample corpus + schema
+  pharma/             four pipeline decks, a Document Intelligence graph, adopted
 ```
