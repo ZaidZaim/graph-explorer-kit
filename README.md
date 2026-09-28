@@ -164,6 +164,12 @@ Fill in `GRAPHRAG_PROJECT`, the `NEO4J_*` values, and the provider block.
 uv sync
 ```
 
+Add `--extra ocr` if the corpus is PDFs that are scans rather than born-digital —
+see `graphrag-prepare` under **Run**. That pulls in `pypdfium2` and Pillow for
+rendering pages; the OCR engine itself is [Tesseract](https://github.com/tesseract-ocr/tesseract),
+installed separately (`winget install UB-Mannheim.TesseractOCR`, `apt install
+tesseract-ocr`, `brew install tesseract`) and found on PATH or via `TESSERACT_CMD`.
+
 ## Run
 
 ```bash
@@ -183,18 +189,57 @@ blocks until all of them report `ONLINE`. Every label and property it indexes
 comes from the project's `lexical` spec.
 
 ```bash
+uv run graphrag-prepare ~/Downloads/some-release/
+```
+
+Optional, for a corpus of scanned PDFs. Writes one Markdown file per PDF into the
+project's data directory, reading each *page* from its text layer where that layer
+is trustworthy and OCR-ing it with Tesseract where it is missing or is a previous
+pass's character salad. Photographic negatives (white type on a dark ground) are
+inverted first. A page whose reading is noise shaped like words — OCR of a
+halftone photograph, say — is recorded as illegible rather than handed to the
+extractor, judged against a word list. The header of each file records how many
+pages went which way. Files already prepared are skipped, so it is safe to
+re-run on a folder that has grown; `--force` redoes them, `--force-ocr` ignores
+text layers altogether, and `--regrade` re-applies the word-list gate to
+Markdown prepared earlier without touching the PDFs. See
+[prepare.py](src/graphrag_kit/prepare.py) for why this is a corpus step rather
+than something the pipeline does on the fly.
+
+```bash
 uv run graphrag-ingest
 ```
 
 Chunks every document in the project's data directory, embeds each chunk, extracts
 entities and relationships under the project's schema, rolls up evidence levels,
 then merges duplicate entities. `.md`, `.markdown` and `.pdf` are picked up,
-recursively — those are what the pipeline's default file loader can read, and it
-raises on anything else rather than ingesting it to nothing.
+recursively. PDFs go through the same page-by-page reader as `graphrag-prepare`,
+so a scan dropped straight on the pipeline — or on the explorer's **Extend the
+graph** — is OCR'd rather than ingested to nothing; without the `ocr` extra it
+falls back to pypdf's text layer.
 
 Name files explicitly to ingest only those — `uv run graphrag-ingest data/one-new-note.md`
 — and pass `--no-resolve` to skip the duplicate-entity merge, which is what you want
 while you are still iterating on `extraction_rules`.
+
+For a corpus of hundreds of files the same command is a batch runner:
+
+```bash
+uv run graphrag-ingest --skip-ingested --continue-on-error --parallel 3 --no-resolve
+uv run graphrag-ingest --resolve-only --resolve-scope project
+```
+
+`--skip-ingested` leaves out any file whose name is already a source in the graph,
+which makes an interrupted run resumable. `--continue-on-error` reports a failing
+document at the end instead of stopping, after removing whatever it half-wrote so
+the next run picks it up again. `--lenient` goes one level finer: a chunk the
+model answers with malformed JSON is logged and skipped rather than failing its
+file, which on a 400-chunk scan is the difference between losing one passage and
+losing the document. `--parallel N` extracts N documents at once, each
+already fanning out over its chunks; two or three is plenty against one
+deployment's quota. Files are taken smallest first, so most of a corpus is in the
+graph early. Resolution is then run once, at the end, over everything — see
+**Entity resolution** for what `--resolve-scope project` means on an adopted graph.
 
 ```bash
 uv run graphrag-serve
@@ -254,16 +299,84 @@ Model configuration is shared with everything else — same deployment, same Ent
 or key auth — except for the API version, which it sets itself. See
 `AGENT_CHAT_API` in [.env.example](.env.example).
 
+## Conversations and memory
+
+The second question is always a follow-up — "and in 1949?", "which of those
+had radar?", "show me the other document" — and a demo that answers each
+question as if it were the first cannot hold a conversation. So the explorer
+and `graphrag-agent --chat` keep one, and with
+[`neo4j-agent-memory`](https://neo4j.com/labs/agent-memory/) installed
+(`uv sync --extra memory`) they keep it in Neo4j, in the same instance as the
+knowledge graph. [memory.py](src/graphrag_kit/memory.py) is the seam.
+
+What a conversation gives you:
+
+- **Follow-ups the agent understands.** Each conversation is an Agent Framework
+  session whose history provider reads and writes Neo4j, so the agent sees the
+  earlier turns and a restarted server resumes the thread. It also gets a
+  `recall_conversations` tool that searches every earlier conversation, so
+  "what did I ask last week about Socorro?" is answerable.
+- **Follow-ups for the fixed retrievers too**, by a cheaper route: before a
+  `hybrid-cypher` question is embedded, the recent turns are used to rewrite it
+  into one that stands alone, and the rewrite is shown ("Read as …") so nothing
+  happens silently.
+- **A transcript that outlives the tab.** The browser keeps its session id in
+  local storage and rebuilds the thread from `GET /api/conversations/{id}` on
+  reload. `new` starts another thread; the old one stays stored.
+- **State history.** Every agent turn is recorded as a reasoning trace — the
+  question, the tools it called in order, the answer — as nodes next to the
+  messages. `MATCH (t:ReasoningTrace)-[:HAS_STEP]->(s) RETURN t.task, s.action`
+  is the agent's working, queryable like everything else.
+
+From the terminal:
+
+```bash
+uv run graphrag-agent --chat                       # a new conversation
+uv run graphrag-agent --chat --session demo-night  # resume, or name, one
+uv run graphrag-agent --session demo-night --forget --chat
+```
+
+Two things are deliberate. Memory does **not** extract entities from the
+conversation into long-term memory: the package can, but its POLE+O labels
+(`Person`, `Location`, `Event`) are this project's schema labels too, and a
+question mentioning Roswell must not create a `Location` next to the ones the
+documents produced. Messages and traces are the memory; the knowledge graph
+stays the documents'. And memory is optional: `AGENT_MEMORY=off` runs without
+it (history then lives in the server process), `AGENT_MEMORY=on` refuses to
+start without the package, and `NAMS_API_KEY` switches the store from this
+Neo4j instance to the hosted Neo4j Agent Memory Service — early-access, and
+wired up here but not exercised.
+
 ## The explorer
 
 Three views over the one graph, switched in the masthead:
 
 | View | What it shows |
 |---|---|
-| **Graph** | The records, by default — every one of them, as the graph they form. `Types` rolls it up to one node per label, sized by how many records carry it and with edges weighted by how many relationships they stand for; click a type for its records, then click a record for itself, its neighbours and every relationship named. |
+| **Graph** | Opens on `Records`: the real graph, up to a limit set in the rail (200 to 3,000; default 400), with the true total alongside. The budget is shared out by type — each type's most connected records, then the neighbours that tie them together, no type above a fifth of the picture — so the spine of the model is what you see, not the one label with the most edges. Click a record for its details; double-click it, or press `expand`, and its connections grow out of it in place, the way Aura expands a node. `Types` rolls the same graph up to one node per label with weighted edges; click a type for its most connected records, then a record for itself and its neighbours. |
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
+- **Big graphs stay responsive.** A corpus of a few hundred documents extracts
+  to tens of thousands of records, and a browser asked to lay out and draw all
+  of them at once stops responding. So nothing ever asks it to: `/api/graph`
+  returns at most `limit` records (default 400, ceiling 6,000,
+  `GRAPH_RENDER_LIMIT` to change the default), chosen to be a picture rather
+  than a sample — seats per type for the most connected records, the rest to
+  neighbours that tie the most of them together, no type above a fifth, and
+  nothing left without an edge on screen; expansion pulls
+  in at most 60 neighbours per gesture, the drill-downs were always capped, and
+  the timeline lists the 600 most connected dated records. Every capped view
+  says what it cut — "400 of 40,079 records, most connected first", "+60 of
+  533 connections" — so the picture is never mistaken for the whole. Filters
+  apply before the cap, so narrowing to one type gets that type's most
+  connected records rather than whatever of it survived a global cut. The
+  complexity is still there to see: it is reached by growing the graph from
+  the node you care about, not by drawing all of it and hoping.
+- **Ask, then follow up.** The chat column is a conversation, not a single
+  answer: earlier turns stay above the live one, "and in 1949?" is understood
+  against them, and `new` starts another thread. See **Conversations and
+  memory** for what is remembered and where.
 - **Full screen for demos.** The control in the masthead, or the F key, puts
   the explorer on the whole display, so the browser's address bar and the OS
   taskbar leave the stage. Esc brings them back.
@@ -347,21 +460,31 @@ also the shortest path to putting your own front-end on the graph:
 | `GET /api/schema` | The project's schema **as a graph** — one node per type with its properties and live count, one edge per pattern. The model itself, queryable. |
 | `GET /api/overview?labels=` | The graph rolled up by type: one node per label, one weighted edge per (label, type, label) actually present. Unlike `/api/schema` this counts the data, so a pattern the schema allows but the corpus never uses does not appear. |
 | `GET /api/instances?label=&limit=` | The drill-down: that type's most connected records plus their neighbours, with the true total alongside. |
-| `GET /api/graph?labels=&status=&connected=` | The entity graph, comma-separated filters. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
-| `GET /api/expand?id=` | One node plus its direct neighbours and the edges among them. |
+| `GET /api/graph?labels=&status=&connected=&limit=` | The entity graph, comma-separated filters, up to `limit` records (default 400, ceiling 6,000) chosen type by type — each type's most connected, then the neighbours that tie them, no type above a fifth — with `shown` and `total` alongside. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
+| `GET /api/expand?id=&limit=` | One node, its most connected neighbours up to `limit` (default 60), and the edges among them, with `shown` and `total`. The unit of in-place expansion. |
 | `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. Terms are Lucene-escaped, so a half-typed query is a search rather than a 500. |
-| `GET /api/timeline` | Entities carrying the project's `date_property`, in order. |
+| `GET /api/timeline?limit=` | The most connected entities carrying the project's `date_property`, in date order, with `shown` and `total`. |
+| `GET /api/conversations` | Stored conversations, newest first: id, first question, size. |
+| `POST /api/conversations` | Mint a conversation id. Nothing is stored until the first question. |
+| `GET /api/conversations/{id}` | The transcript, oldest first — what the browser rebuilds its thread from. |
+| `DELETE /api/conversations/{id}` | Forget a conversation: its messages, its reasoning traces, and the agent holding it. |
 | `GET /api/documents` | The corpus behind the graph: each source file with its passage and record counts. |
 | `POST /api/documents` | **Extend the graph.** Multipart upload; runs the same pipeline, schema and extraction rules over the new file and streams stages as SSE, ending with the subgraph it added. |
 | `POST /api/ask` | Answer, retrieved context, and evidence subgraph, as one JSON body. |
 | `POST /api/ask/stream` | The same work as Server-Sent Events, one event per stage. |
 
-Both ask routes take the same body — `retriever` and `top_k` are optional, and
-`top_k` is capped at 25:
+Both ask routes take the same body — `retriever`, `top_k` and `session_id` are
+optional, and `top_k` is capped at 25:
 
 ```json
-{ "question": "...", "retriever": "hybrid-cypher", "top_k": 5 }
+{ "question": "...", "retriever": "hybrid-cypher", "top_k": 5, "session_id": "…" }
 ```
+
+With a `session_id` the question is a turn in that conversation (see
+**Conversations and memory**); without one it is answered on its own, exactly
+as before conversations existed. The answer carries the `session_id` back and,
+for the fixed retrievers, `interpreted`: the standalone question a follow-up was
+rewritten to, or `null` when it was taken as asked.
 
 The stream emits five event types. `stage` announces what is running; `unfold`
 carries one ring of nodes and relationships (`evidence`, `entities`, then
@@ -471,6 +594,29 @@ on purpose — several distinct sightings each named "Fireball sighting" — and
 reachable from the document just ingested. Duplicates *within* the new document
 still merge; nothing outside it is touched.
 
+That default scope is one run's files. A corpus ingested in several sittings
+needs two more, both run afterwards with `--resolve-only`. `--resolve-scope
+document` takes every file this project ingested one at a time — the pass a
+batch run with `--no-resolve` skipped. `--resolve-scope project` then takes all
+of them together, so the agency named in Tuesday's batch and again in
+Wednesday's becomes one node — and still never touches the records the adopted
+tool wrote.
+
+Two things in the `ProjectSpec` keep exact-name merging from doing damage:
+
+- **`placeholder_names`** (`[REDACTED]`, `[ILLEGIBLE]`, `unknown`, …) are never
+  merged, in any scope. The extraction rules produce them on purpose for
+  withheld names, and forty-eight redacted witnesses are forty-eight people,
+  not one. Compared case-insensitively.
+- **`cross_document_labels`** lists the labels whose name is an identity —
+  agencies, places, named people — and only those merge *across* documents.
+  An Event named "Reported object sighting" or an Object named "the object"
+  recurs in every file and is a different record each time. Cross-document
+  merges also require a capital letter or a digit in the name, so "USCENTCOM"
+  and "SU-27" merge while "radar" and "vehicle" stay apart. Within one
+  document neither rule applies: the extractor was reading one text, and a
+  repeated name there is one thing. `None` (the default) means every label.
+
 The same flag makes `graphrag-reset` refuse without
 `--i-know-this-graph-is-not-mine`, because "everything this demo created" is not a
 set that command can compute on a graph it did not create.
@@ -532,6 +678,13 @@ retriever span the lot. Reset between projects, or give each its own
   fixed width, and `graphrag-setup` is the only thing that creates it. Re-ingesting
   straight after a reset writes embeddings into a database with no vector index,
   which fails silently: retrieval just returns nothing.
+- **429s are retried eight times, not three.** neo4j-graphrag's default rate
+  limit handler gives up after three attempts, which a batch ingest fanning out
+  over hundreds of chunks outlasts; the symptom is a whole document reported as
+  failed with a `RetryError`. `get_llm` and `get_embedder` install a handler
+  with eight attempts and a two-minute backoff cap; `LLM_RATE_LIMIT_ATTEMPTS`
+  changes the count. Two batches against one deployment still add up: run one
+  at a time.
 - **Temperature is opt-in.** Newer reasoning models (`gpt-5-mini` and friends)
   reject any temperature other than their default and return HTTP 400, so nothing
   is sent unless you set `LLM_TEMPERATURE`.
@@ -599,10 +752,12 @@ src/graphrag_kit/
   cypher.py           Cypher fragments built from the project spec
   setup_indexes.py    indexes + ONLINE polling       -> graphrag-setup
   adopt.py            read a graph built elsewhere   -> graphrag-adopt
+  prepare.py          PDFs -> Markdown, OCR fallback -> graphrag-prepare
   ingest.py           SimpleKGPipeline + rollup      -> graphrag-ingest
   retrievers.py       five retrievers, retrieval_query, RAG prompt
   ask.py              terminal client                -> graphrag-ask
   agent.py            retrievers as agent tools      -> graphrag-agent
+  memory.py           conversations + memory in Neo4j (neo4j-agent-memory)
   server.py           FastAPI + JSON/SSE API         -> graphrag-serve
   reset.py            scoped teardown                -> graphrag-reset
   static/             explorer front-end (no build step)

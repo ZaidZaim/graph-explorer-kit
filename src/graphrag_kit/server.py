@@ -73,6 +73,14 @@ from graphrag_kit.cypher import (
     source_name_expr,
 )
 from graphrag_kit.ingest import SUPPORTED_SUFFIXES, ingest_files
+from graphrag_kit.memory import (
+    Conversations,
+    describe_memory,
+    memory_wanted,
+    new_session_id,
+    open_memory,
+    standalone_question,
+)
 from graphrag_kit.project import ProjectSpec, load_project
 from graphrag_kit.retrievers import RETRIEVERS, build_rag_prompt, evidence_entity_ids
 
@@ -96,10 +104,18 @@ async def lifespan(app: FastAPI):
     state["llm"] = get_llm()
     state["rag"] = {}
     state["agent"] = None
+    # Conversations are opened on the first question that carries a session id.
+    # Connecting the memory store sets up its own indexes, which takes a while
+    # the first time, and a misconfigured store should cost the conversation
+    # features, not the explorer.
+    state["conversations"] = None
+    state["conversations_lock"] = asyncio.Lock()
     # One ingest at a time. Two concurrent runs over the same corpus race on
     # entity resolution and produce duplicates that look like extraction bugs.
     state["ingest_lock"] = asyncio.Lock()
     yield
+    if state.get("conversations") is not None:
+        await state["conversations"].close()
     await state["llm"].aclose()
     state["driver"].close()
 
@@ -133,6 +149,21 @@ def rag_for(retriever_name: str) -> GraphRAG:
             ),
         )
     return state["rag"][retriever_name]
+
+
+async def conversations() -> Conversations:
+    """The conversation registry, and the memory behind it, opened on first use."""
+    async with state["conversations_lock"]:
+        if state["conversations"] is None:
+            memory = None
+            if memory_wanted():
+                try:
+                    memory = await open_memory()
+                except Exception as exc:  # noqa: BLE001 - degrade, do not fail the ask
+                    print(f"memory: unavailable ({exc}); keeping history in process")
+            print(f"memory: {describe_memory(memory)}")
+            state["conversations"] = Conversations(state["driver"], spec(), memory)
+        return state["conversations"]
 
 
 def agent():
@@ -306,6 +337,9 @@ def meta() -> dict:
         "evidenceLevels": list(project.evidence_levels),
         "hasTimeline": bool(project.date_property),
         "uploadSuffixes": sorted(SUPPORTED_SUFFIXES),
+        # What the records view draws at most, so the UI can say what it cut.
+        "graphLimit": GRAPH_LIMIT,
+        "memory": memory_wanted(),
     }
     if project.grades_evidence:
         statuses = run(
@@ -435,11 +469,22 @@ def overview(labels: str | None = None) -> dict:
     }
 
 
+#: The most records the records view returns at once, and the ceiling a caller
+#: may raise it to. Fifty thousand records is not a picture, it is a browser
+#: tab that stops responding: the force layout is quadratic in the worst case,
+#: every edge is drawn every frame, and the JSON alone is tens of megabytes.
+#: The most connected records carry the structure, so those are the ones kept,
+#: and the true total goes back with them.
+GRAPH_LIMIT = int(os.getenv("GRAPH_RENDER_LIMIT", "400"))
+GRAPH_LIMIT_CEILING = 6000
+
+
 @app.get("/api/graph")
 def graph(
     labels: str | None = None,
     status: str | None = None,
     connected: bool = True,
+    limit: int | None = None,
 ) -> dict:
     """The entity graph, optionally filtered by label and evidence level.
 
@@ -448,30 +493,161 @@ def graph(
     table and has nothing to attach it to — and as a default view they are a
     field of unreadable dust around the structure worth looking at. The count
     is reported in /api/meta so the UI can offer them rather than hide them.
+
+    `limit` caps the records returned; `shown` and `total` say what was cut.
+    Filtering happens before the cap, so narrowing to one type or one evidence
+    level gets that type's most connected records rather than whatever of it
+    survived a global cut.
+
+    Which records make the cut decides whether the result is a picture or a
+    field of dust — and of what. The top-N by degree alone is dust: each hub's
+    edges mostly lead to records outside the top N. Seeds plus the neighbours
+    that tie them together is a web, but a web of Documents, because in a
+    corpus of records the documents are what mention everything else, and by
+    degree they win every seat. So the budget is shared out by type: every
+    type present gets seats for its most connected records, the rest of the
+    budget goes to the neighbours that tie the most seeds together, and no
+    single type may take more than a fifth of the picture. What is drawn is
+    the spine of the model — events at places, observations of objects by
+    witnesses, agencies and the documents that name them — as a connected
+    graph, rather than the one label that happens to have the most edges.
     """
     project = spec()
+    cap = max(1, min(limit or GRAPH_LIMIT, GRAPH_LIMIT_CEILING))
     wanted_labels = [x for x in (labels or "").split(",") if x] or project.labels
-    clauses = ["any(l IN labels(n) WHERE l IN $labels)"]
     params: dict[str, Any] = {"labels": wanted_labels}
-    if connected:
-        clauses.append("(n)-[]-(:__Entity__)")
     if project.grades_evidence:
         params["status"] = [x for x in (status or "").split(",") if x] or list(
             project.evidence_levels
         )
-        clauses.append(f"{evidence_expr('n', project)} IN $status")
-    records = run(
+
+    def filters(var: str) -> list[str]:
+        """The view's filters as WHERE clauses on `var`, so the same filter can
+        be applied to a node and, later, to a neighbour under another name."""
+        out = [f"any(l IN labels({var}) WHERE l IN $labels)"]
+        if connected:
+            out.append(f"({var})-[]-(:__Entity__)")
+        if project.grades_evidence:
+            out.append(f"{evidence_expr(var, project)} IN $status")
+        return out
+
+    clauses = filters("n")
+    total = run(
+        f"MATCH (n:__Entity__) WHERE {' AND '.join(clauses)} RETURN count(n) AS c",
+        **params,
+    )[0]["c"]
+    where = " AND ".join(clauses)
+    per_label_ceiling = max(8, cap // 5)
+    per_label_seeds = max(3, cap // (4 * max(1, len(wanted_labels))))
+    # Seeds: each type's most connected records, so every type present is in
+    # the picture from the start.
+    seeds = run(
         f"""
         MATCH (n:__Entity__)
-        WHERE {' AND '.join(clauses)}
-        RETURN {node_projection()}
+        WHERE {where}
+        WITH n, {label_expr("n")} AS label, count {{ (n)-[]-(:__Entity__) }} AS degree
+        ORDER BY degree DESC, n.name
+        WITH label, collect(elementId(n))[..$per_label] AS ids
+        UNWIND ids AS id
+        RETURN id, label
         """,
+        per_label=per_label_seeds,
         **params,
+    )
+    taken: dict[str, int] = {}
+    ids: list[str] = []
+    for r in seeds:
+        if len(ids) >= cap:
+            break
+        ids.append(r["id"])
+        taken[r["label"]] = taken.get(r["label"], 0) + 1
+    # Fill: the neighbours that tie the most seeds together, best first, each
+    # type capped so the documents that mention everything cannot crowd out the
+    # records they mention. The same filters apply to the neighbours (`n` is
+    # the variable the clauses name), so a view narrowed to Agencies draws
+    # agencies, not their documents.
+    seed_ids = list(ids)
+    candidates = run(
+        f"""
+        MATCH (s:__Entity__) WHERE elementId(s) IN $seed_ids
+        MATCH (s)-[]-(n:__Entity__)
+        WHERE NOT elementId(n) IN $seed_ids AND {where}
+        WITH n, count(DISTINCT s) AS ties, count {{ (n)-[]-(:__Entity__) }} AS degree
+        ORDER BY ties DESC, degree DESC, n.name
+        LIMIT $limit
+        RETURN elementId(n) AS id, {label_expr("n")} AS label
+        """,
+        seed_ids=seed_ids,
+        limit=max(0, cap - len(seed_ids)) * 12,
+        **params,
+    )
+    # Two passes: with the ceiling, then — if seats are still empty because the
+    # pool was mostly one type — without it. A full picture of the corpus as
+    # it is beats an empty seat kept for a type that has nothing more to add.
+    chosen = set(ids)
+    for enforce_ceiling in (True, False):
+        for r in candidates:
+            if len(ids) >= cap:
+                break
+            if r["id"] in chosen:
+                continue
+            if enforce_ceiling and taken.get(r["label"], 0) >= per_label_ceiling:
+                continue
+            ids.append(r["id"])
+            chosen.add(r["id"])
+            taken[r["label"]] = taken.get(r["label"], 0) + 1
+    # A seed from a small type — a Release, a Redaction — may connect to nothing
+    # else on screen. Give each one its best neighbour while seats remain within
+    # the cap, and leave out whatever is still alone: a dot with no edge says
+    # nothing about a graph.
+    lonely = run(
+        """
+        MATCH (n:__Entity__) WHERE elementId(n) IN $ids
+        AND NOT EXISTS { (n)-[]-(m:__Entity__) WHERE elementId(m) IN $ids }
+        RETURN elementId(n) AS id
+        """,
+        ids=ids,
+    )
+    lonely_ids = [r["id"] for r in lonely]
+    if lonely_ids:
+        companions = run(
+            f"""
+            MATCH (n:__Entity__) WHERE elementId(n) IN $lonely
+            MATCH (n)-[]-(m:__Entity__)
+            WHERE NOT elementId(m) IN $ids AND {" AND ".join(filters("m"))}
+            WITH n, m, count {{ (m)-[]-(:__Entity__) }} AS degree
+            ORDER BY degree DESC
+            WITH n, head(collect(elementId(m))) AS best
+            RETURN elementId(n) AS id, best
+            """,
+            lonely=lonely_ids,
+            ids=ids,
+            **params,
+        )
+        rescued = set()
+        for r in companions:
+            if r["best"] is None:
+                continue
+            if r["best"] in chosen:
+                rescued.add(r["id"])
+                continue
+            if len(ids) >= cap:
+                break
+            ids.append(r["best"])
+            chosen.add(r["best"])
+            rescued.add(r["id"])
+        ids = [i for i in ids if i not in set(lonely_ids) - rescued]
+    records = run(
+        f"MATCH (n:__Entity__) WHERE elementId(n) IN $ids RETURN {node_projection()}",
+        ids=ids,
     )
     nodes = [node_dict(r) for r in records]
     return {
         "nodes": nodes,
         "relationships": relationships_among([n["id"] for n in nodes]),
+        "shown": len(nodes),
+        "total": total,
+        "limit": cap,
     }
 
 
@@ -516,9 +692,50 @@ def instances(label: str, limit: int = INSTANCE_LIMIT) -> dict:
     }
 
 
+#: Neighbours pulled in when a node is expanded in place. A hub like "FBI" has
+#: five hundred; drawn all at once they bury the node that was expanded. The
+#: most connected come first, and the total goes back so the note can say
+#: "+60 of 533".
+EXPAND_LIMIT = 60
+
+
 @app.get("/api/expand")
-def expand(id: str) -> dict:
-    return subgraph_for_ids([id], include_neighbours=True)
+def expand(id: str, limit: int = EXPAND_LIMIT) -> dict:
+    """One node, its most connected neighbours up to `limit`, and every edge
+    among them — the unit of Aura-style expansion: double-click, and the
+    graph grows outward from that node without redrawing the rest."""
+    cap = max(1, min(limit, 400))
+    total = run(
+        """
+        MATCH (seed:__Entity__) WHERE elementId(seed) = $id
+        MATCH (seed)-[]-(nbr:__Entity__)
+        RETURN count(DISTINCT nbr) AS c
+        """,
+        id=id,
+    )
+    if not total:
+        raise HTTPException(404, "no such node")
+    records = run(
+        f"""
+        MATCH (seed:__Entity__) WHERE elementId(seed) = $id
+        OPTIONAL MATCH (seed)-[]-(nbr:__Entity__)
+        WITH seed, nbr, count {{ (nbr)-[]-(:__Entity__) }} AS degree
+        ORDER BY degree DESC, nbr.name
+        WITH seed, [x IN collect(DISTINCT nbr) WHERE x IS NOT NULL][..$limit] AS nbrs
+        UNWIND [seed] + nbrs AS n
+        RETURN {node_projection()}
+        """,
+        id=id,
+        limit=cap,
+    )
+    nodes = [node_dict(r) for r in records]
+    return {
+        "nodes": nodes,
+        "relationships": relationships_among([n["id"] for n in nodes]),
+        "seeds": [id],
+        "shown": max(0, len(nodes) - 1),
+        "total": total[0]["c"],
+    }
 
 
 @app.get("/api/search")
@@ -538,22 +755,35 @@ def search(q: str, limit: int = 15) -> dict:
     return {"nodes": [node_dict(r) for r in records]}
 
 
+#: Dated records the timeline lists. Thousands of rows is a scroll, not a
+#: timeline; the most connected dated records are the ones worth a line.
+TIMELINE_LIMIT = 600
+
+
 @app.get("/api/timeline")
-def timeline() -> dict:
+def timeline(limit: int = TIMELINE_LIMIT) -> dict:
     """Dated entities in order — a timeline view, when the schema has dates."""
     project = spec()
     if not project.date_property:
         return {"nodes": []}
+    total = run(
+        f"MATCH (n:__Entity__) WHERE n.`{project.date_property}` IS NOT NULL RETURN count(n) AS c"
+    )[0]["c"]
     records = run(
         f"""
         MATCH (n:__Entity__) WHERE n.`{project.date_property}` IS NOT NULL
-        RETURN {node_projection()}, n.`{project.date_property}` AS date
-        ORDER BY date
-        """
+        WITH n, count {{ (n)-[]-(:__Entity__) }} AS degree
+        ORDER BY degree DESC LIMIT $limit
+        WITH n, n.`{project.date_property}` AS date ORDER BY date
+        RETURN {node_projection()}, date
+        """,
+        limit=max(1, min(limit, GRAPH_LIMIT_CEILING)),
     )
     return {
         "nodes": [{**node_dict(r), "date": r["date"]} for r in records],
         "dateProperty": project.date_property,
+        "shown": len(records),
+        "total": total,
     }
 
 
@@ -591,6 +821,15 @@ class AskRequest(BaseModel):
     question: str
     retriever: str = "hybrid-cypher"
     top_k: int = Field(default=5, ge=1, le=25)
+    #: A conversation to continue. Omitted, the question is answered on its own,
+    #: exactly as before conversations existed. Any non-empty string is a valid
+    #: id; the browser mints one per thread.
+    session_id: str | None = Field(default=None, max_length=128)
+
+
+def clean_session_id(value: str | None) -> str | None:
+    value = (value or "").strip()
+    return value or None
 
 
 @app.post("/api/ask")
@@ -598,11 +837,22 @@ async def ask(req: AskRequest) -> dict:
     question = req.question.strip()
     if not question:
         raise HTTPException(400, "question is required")
+    session_id = clean_session_id(req.session_id)
     if req.retriever == AGENT_MODE:
-        return await ask_via_agent(question, req.top_k)
+        return await ask_via_agent(question, req.top_k, session_id)
+    # A follow-up ("and in 1949?") is rewritten against the conversation before
+    # it is embedded; the rewrite is returned so nothing happens silently.
+    asked, interpreted = question, None
+    if session_id:
+        turns = await (await conversations()).recent_turns(session_id)
+        asked = await run_in_threadpool(standalone_question, state["llm"], turns, question)
+        interpreted = asked if asked != question else None
     # The GraphRAG pipeline is synchronous all the way down. Off the event loop
     # it goes, or one question blocks every other request for its whole duration.
-    return await run_in_threadpool(ask_via_pipeline, question, req.retriever, req.top_k)
+    result = await run_in_threadpool(ask_via_pipeline, asked, req.retriever, req.top_k)
+    if session_id:
+        await (await conversations()).record(session_id, question, result["answer"], req.retriever)
+    return {**result, "interpreted": interpreted, "session_id": session_id}
 
 
 def ask_via_pipeline(question: str, retriever: str, top_k: int) -> dict:
@@ -650,14 +900,21 @@ def most_connected(ids: list[str], limit: int) -> list[str]:
     return [r["id"] for r in records]
 
 
-async def ask_via_agent(question: str, top_k: int) -> dict:
+async def ask_via_agent(question: str, top_k: int, session_id: str | None = None) -> dict:
     """The agent picks its own retrievers, and may use several.
 
     Its evidence subgraph comes from the trail its tools left rather than from
     `evidence_subgraph`, so what lights up is what the agent actually read —
     including entities reached by a name lookup that no chunk search returned.
+
+    With a session id the question is a turn in a conversation: the agent sees
+    the earlier turns, and this one is written to the transcript and recorded
+    as a reasoning trace (see memory.py). Without one it is stateless.
     """
-    result = await ask_agent(agent(), question)
+    if session_id:
+        result = await (await conversations()).ask(session_id, question)
+    else:
+        result = await ask_agent(agent(), question)
     ids = result.trail.entity_ids
     if ids:
         shown = await run_in_threadpool(most_connected, ids, AGENT_EVIDENCE_LIMIT)
@@ -676,6 +933,7 @@ async def ask_via_agent(question: str, top_k: int) -> dict:
         "context": result.trail.calls or ["(the agent answered without calling a tool)"],
         "subgraph": subgraph,
         "read": len(ids),
+        "session_id": session_id,
     }
 
 
@@ -847,28 +1105,36 @@ def sse(event: str, payload: dict) -> str:
 
 
 @app.post("/api/ask/stream")
-def ask_stream(req: AskRequest) -> StreamingResponse:
+async def ask_stream(req: AskRequest) -> StreamingResponse:
     """The same answer as /api/ask, delivered one pipeline stage at a time.
 
     The model is the slow part, so it starts first and runs on a worker thread
     while the retrieval rings — chunks, then their entities, then the wider
     neighbourhood — stream out ahead of it.
     """
-    question = req.question.strip()
-    if not question:
+    original = req.question.strip()
+    if not original:
         raise HTTPException(400, "question is required")
+    session_id = clean_session_id(req.session_id)
     if req.retriever == AGENT_MODE:
         return StreamingResponse(
-            agent_stages(question, req.top_k),
+            agent_stages(original, req.top_k, session_id),
             media_type="text/event-stream",
             headers=SSE_HEADERS,
         )
     rag = rag_for(req.retriever)          # raises 400 before the stream opens
     config = {} if req.retriever == "text2cypher" else {"top_k": req.top_k}
+    # The conversation is read here, on the loop, so the worker thread below
+    # only has synchronous work to do; the exchange is written back the same way.
+    turns = await (await conversations()).recent_turns(session_id) if session_id else []
+    loop = asyncio.get_running_loop()
 
     def stages() -> Iterator[str]:
         pool = ThreadPoolExecutor(max_workers=1)
         try:
+            question = standalone_question(state["llm"], turns, original)
+            if question != original:
+                yield sse("stage", {"name": "interpreting", "label": f"Reading as: {question}"})
             pending = pool.submit(
                 rag.search,
                 query_text=question,
@@ -933,11 +1199,20 @@ def ask_stream(req: AskRequest) -> StreamingResponse:
 
             result = pending.result()
             items = result.retriever_result.items if result.retriever_result else []
+            if session_id:
+                asyncio.run_coroutine_threadsafe(
+                    state["conversations"].record(
+                        session_id, original, result.answer, req.retriever
+                    ),
+                    loop,
+                )
             yield sse(
                 "answer",
                 {
                     "answer": result.answer,
                     "context": [item.content for item in items],
+                    "interpreted": question if question != original else None,
+                    "session_id": session_id,
                 },
             )
         except Exception as exc:                          # noqa: BLE001
@@ -952,7 +1227,9 @@ def ask_stream(req: AskRequest) -> StreamingResponse:
     )
 
 
-async def agent_stages(question: str, top_k: int) -> AsyncIterator[str]:
+async def agent_stages(
+    question: str, top_k: int, session_id: str | None = None
+) -> AsyncIterator[str]:
     """The agent's version of the unfold.
 
     There are no retrieval rings to stream here. The agent decides what to look
@@ -966,7 +1243,7 @@ async def agent_stages(question: str, top_k: int) -> AsyncIterator[str]:
             "stage",
             {"name": "reasoning", "label": "The agent is choosing its tools…"},
         )
-        result = await ask_via_agent(question, top_k)
+        result = await ask_via_agent(question, top_k, session_id)
         subgraph = result["subgraph"]
         shown, read = len(subgraph["nodes"]), result.get("read", 0)
         yield sse(
@@ -984,10 +1261,44 @@ async def agent_stages(question: str, top_k: int) -> AsyncIterator[str]:
         )
         yield sse(
             "answer",
-            {"answer": result["answer"], "context": result["context"]},
+            {
+                "answer": result["answer"],
+                "context": result["context"],
+                "session_id": session_id,
+            },
         )
     except Exception as exc:                              # noqa: BLE001
         yield sse("error", {"message": str(exc)})
+
+
+# --- conversations ----------------------------------------------------------
+
+
+@app.get("/api/conversations")
+async def list_conversations() -> dict:
+    """Every stored conversation, newest first: id, first question, size."""
+    return {"sessions": await (await conversations()).sessions()}
+
+
+@app.post("/api/conversations")
+async def new_conversation() -> dict:
+    """Mint an id. Nothing is stored until the first question."""
+    return {"session_id": new_session_id()}
+
+
+@app.get("/api/conversations/{session_id}")
+async def get_conversation(session_id: str) -> dict:
+    """The transcript, oldest first — what the browser rebuilds its thread from
+    after a reload, and what `graphrag-agent --session` resumes."""
+    turns = await (await conversations()).history(session_id)
+    return {"session_id": session_id, "turns": [t.as_dict() for t in turns]}
+
+
+@app.delete("/api/conversations/{session_id}")
+async def forget_conversation(session_id: str) -> dict:
+    """Forget a conversation: its messages, its traces, and the agent holding it."""
+    await (await conversations()).forget(session_id)
+    return {"session_id": session_id, "forgotten": True}
 
 
 # --- extending the graph ----------------------------------------------------

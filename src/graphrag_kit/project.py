@@ -155,6 +155,22 @@ class ProjectSpec:
     #:   * `graphrag-reset` refuses without an explicit extra flag.
     owns_graph: bool = True
 
+    #: Names that stand for "no name". Entity resolution merges same-label,
+    #: same-name records, and the extraction rules deliberately produce these
+    #: for withheld or unreadable names — so without this list every redacted
+    #: witness in the corpus becomes one witness. Compared case-insensitively.
+    placeholder_names: tuple[str, ...] = ("[REDACTED]", "[ILLEGIBLE]", "unknown", "n/a", "none")
+
+    #: Labels whose same-named records in *different* documents are the same
+    #: thing — an agency, a place, a named person. None means every label,
+    #: which is right for a corpus written to be resolved that way. Set it where
+    #: a name is a description rather than an identity: two documents' "the
+    #: object" or "Reported object sighting" are two objects and two sightings,
+    #: and merging them across the corpus manufactures a hub that never existed.
+    #: Within one document the label list does not apply; there, the extractor
+    #: was looking at one text and a repeated name is one thing.
+    cross_document_labels: tuple[str, ...] | None = None
+
     lexical: LexicalSpec = field(default_factory=LexicalSpec)
     # A stylesheet the explorer loads after its own, so a project can carry the
     # visual idiom of its subject - palette, type, chrome - without a fork of

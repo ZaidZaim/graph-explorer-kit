@@ -18,7 +18,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com" />
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@200;300;400;500&family=Lato:wght@300;400;700&display=swap" rel="stylesheet" />
-<link rel="stylesheet" href="/static/styles.css?v=9" />
+<link rel="stylesheet" href="/static/styles.css?v=10" />
 <!-- The active project's own look, if it ships one; empty otherwise. -->
 <link rel="stylesheet" href="/theme.css" />
 </head>
@@ -82,7 +82,7 @@
     <section class="panel" id="pole-panel">
       <h2>POLE <span class="hint">click to filter</span></h2>
       <div id="graph-mode" class="segmented" role="group" aria-label="Graph detail">
-        <button type="button" data-mode="all" class="is-active">All records</button>
+        <button type="button" data-mode="all" class="is-active">Records</button>
         <button type="button" data-mode="overview">Types</button>
       </div>
       <div id="pole-groups" class="pole"></div>
@@ -91,6 +91,16 @@
           <span class="dot"></span>
           <span>Unlinked records</span>
           <span class="count" id="isolated-count">0</span>
+        </li>
+        <li id="limit-row" class="is-static" title="How many of the most connected records to draw at once">
+          <span>Records drawn</span>
+          <select id="graph-limit" aria-label="Records drawn">
+            <option value="200">200</option>
+            <option value="400">400</option>
+            <option value="800">800</option>
+            <option value="1500">1,500</option>
+            <option value="3000">3,000</option>
+          </select>
         </li>
       </ul>
     </section>
@@ -154,14 +164,20 @@
     <section id="dock" aria-label="Ask the record">
       <header class="dock-head">
         <h2>Ask the record</h2>
-        <p>Answers unfold on the graph as they are reasoned out.</p>
+        <p id="dock-blurb">Answers unfold on the graph as they are reasoned out.</p>
       </header>
 
       <section id="answer" class="answer" hidden>
         <header>
           <h2 id="answer-title">Answer</h2>
-          <button id="close-answer" class="ghost small">close</button>
+          <span class="answer-actions">
+            <button id="new-conversation" class="ghost small" title="Start a new conversation; this one stays stored">new</button>
+            <button id="close-answer" class="ghost small">close</button>
+          </span>
         </header>
+        <!-- Earlier turns of this conversation, oldest first. The live answer
+             stays in #answer-body below them. -->
+        <div id="thread" class="thread" hidden></div>
         <div id="progress" class="progress" hidden>
           <ol id="progress-steps" class="progress-steps"></ol>
           <p id="answer-stage" class="stage-line"></p>
@@ -188,7 +204,10 @@
   <aside id="details" hidden>
     <header>
       <span id="detail-label" class="pill"></span>
-      <button id="close-details" class="ghost small">close</button>
+      <span class="answer-actions">
+        <button id="expand-node" class="ghost small" title="Pull this record's connections into the graph (or double-click it)">expand</button>
+        <button id="close-details" class="ghost small">close</button>
+      </span>
     </header>
     <p id="detail-group" class="group-line"></p>
     <h2 id="detail-name"></h2>
@@ -200,6 +219,6 @@
   </aside>
 
 </div>
-<script type="module" src="/static/app.js?v=8"></script>
+<script type="module" src="/static/app.js?v=9"></script>
 </body>
 </html>

@@ -180,11 +180,11 @@ RETURN label, count(DISTINCT n) AS count ORDER BY count DESC
 AGENT_HIDDEN_PROPERTIES = {"__id__", "id", "index", "name", "description"}
 
 
-def build_agent(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> Agent:
-    """An Agent whose tools are this project's retrievers.
+def build_tools(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> list:
+    """This project's retrievers as agent tools.
 
-    The retrievers are built once and closed over rather than rebuilt per call:
-    each one constructs an embedder, and the text2cypher one an LLM.
+    Built once and shared between agents rather than per call or per session:
+    each retriever constructs an embedder, and the text2cypher one an LLM.
     """
     spec = spec or load_project()
     database = get_database()
@@ -299,12 +299,31 @@ def build_agent(driver: neo4j.Driver, spec: ProjectSpec | None = None) -> Agent:
             + ", ".join(docs[0]["sources"])
         )
 
+    return [search_documents, query_graph_with_cypher, look_up_entity, graph_overview]
+
+
+def build_agent(
+    driver: neo4j.Driver,
+    spec: ProjectSpec | None = None,
+    *,
+    tools: list | None = None,
+    context_providers: list | None = None,
+) -> Agent:
+    """An Agent over this project's tools.
+
+    `context_providers` is how a conversation gets its history: a provider bound
+    to one session reads earlier turns in before each run and writes the new
+    ones out after (see memory.py). With none, the framework keeps history in
+    the session object for as long as the process lives.
+    """
+    spec = spec or load_project()
     return Agent(
         client=get_chat_client(),
         name="graphrag-agent",
         description=f"Answers questions about {spec.title} from its knowledge graph.",
         instructions=build_instructions(spec),
-        tools=[search_documents, query_graph_with_cypher, look_up_entity, graph_overview],
+        tools=tools if tools is not None else build_tools(driver, spec),
+        context_providers=context_providers or None,
     )
 
 
@@ -352,18 +371,54 @@ async def _answer(agent: Agent, question: str, args: argparse.Namespace, session
 
 
 async def _run_cli(args: argparse.Namespace, question: str) -> None:
+    from graphrag_kit.memory import (
+        Conversations,
+        describe_memory,
+        memory_wanted,
+        new_session_id,
+        open_memory,
+    )
+
     spec = load_project()
     driver = get_driver()
     # text2cypher_retriever() builds its own LLM; hold a handle so it gets closed.
     llm = get_llm()
+    conversations = None
+    session_id = None
     try:
-        agent = build_agent(driver, spec)
-        # A session carries history across turns; one-shot runs deliberately get
-        # none, so the same question always produces the same answer.
-        session = agent.create_session() if args.chat else None
+        if args.chat or args.session:
+            # A conversation: history across turns, and — with memory on — across
+            # runs, under the session id. One-shot runs deliberately get none,
+            # so the same question always produces the same answer.
+            memory = await open_memory() if memory_wanted() else None
+            conversations = Conversations(driver, spec, memory)
+            session_id = args.session or new_session_id()
+            print(f"memory: {describe_memory(memory)}", file=sys.stderr)
+            print(f"session: {session_id}", file=sys.stderr)
+            if args.forget:
+                await conversations.forget(session_id)
+                print("forgotten", file=sys.stderr)
+            earlier = await conversations.history(session_id)
+            if earlier:
+                print(f"(resuming: {len(earlier)} earlier messages)", file=sys.stderr)
+            agent, session = conversations.agent_for(session_id)
+        else:
+            agent, session = build_agent(driver, spec), None
+
+        async def answer(text: str) -> None:
+            if conversations is not None and not args.stream:
+                result = await conversations.ask(session_id, text)
+                print(result.answer)
+                if args.show_tools:
+                    print("\n--- tool calls ---")
+                    for call in result.trail.calls or ["(none)"]:
+                        print(f"  {call}")
+                    print(f"--- {len(result.trail.entity_ids)} entities read ---")
+            else:
+                await _answer(agent, text, args, session)
 
         if question:
-            await _answer(agent, question, args, session)
+            await answer(question)
         if args.chat:
             print("\n(empty line or Ctrl-D to exit)")
             while True:
@@ -373,8 +428,10 @@ async def _run_cli(args: argparse.Namespace, question: str) -> None:
                     break
                 if not line:
                     break
-                await _answer(agent, line, args, session)
+                await answer(line)
     finally:
+        if conversations is not None:
+            await conversations.close()
         await llm.aclose()
         driver.close()
 
@@ -390,11 +447,21 @@ def main() -> int:
     parser.add_argument(
         "--show-tools", action="store_true", help="Print which tools the agent called."
     )
+    parser.add_argument(
+        "--session",
+        metavar="ID",
+        help="Continue a stored conversation by id (implies history; with memory on, persists).",
+    )
+    parser.add_argument(
+        "--forget", action="store_true", help="Clear the --session conversation before starting."
+    )
     args = parser.parse_args()
 
     question = " ".join(args.question).strip()
     if not question and not args.chat:
         parser.error("provide a question, or pass --chat")
+    if args.forget and not args.session:
+        parser.error("--forget needs --session")
 
     print(f"agent: {describe_agent_model()}", file=sys.stderr)
     asyncio.run(_run_cli(args, question))

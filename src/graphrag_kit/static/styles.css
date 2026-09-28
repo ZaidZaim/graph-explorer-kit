@@ -338,6 +338,10 @@ input:focus, select:focus, #drop-zone:focus-visible {
   cursor: pointer; user-select: none; font-size: 11px;
 }
 .filters li.is-off { opacity: .35; }
+.filters li.is-static { cursor: default; justify-content: space-between; }
+.filters li.is-static select {
+  width: auto; font-size: 10px; padding: 2px 6px; margin-left: auto;
+}
 .filters .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
 .filters .count { margin-left: auto; font-size: 10px; color: var(--dim); }
 
@@ -528,6 +532,27 @@ button.small { padding: 3px 8px; font-size: 9px; flex: 0 0 auto; }
   display: flex; justify-content: space-between; align-items: center;
   margin-bottom: 11px; padding-bottom: 8px; border-bottom: 1px solid var(--rule-soft);
 }
+.answer-actions { display: flex; gap: 6px; }
+
+/* Earlier turns of the conversation: the question as a short mono line, the
+   answer in the same prose face as the live one, a little smaller, so the
+   thread reads as a transcript rather than a stack of cards. */
+.thread { margin-bottom: 12px; }
+.thread .turn { padding: 0 0 10px; margin-bottom: 10px; border-bottom: 1px dashed var(--rule-soft); }
+.thread .turn-q {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.06em;
+  color: var(--cyan); margin: 0 0 5px; text-transform: none;
+}
+.thread .turn-q .via { color: var(--dim); margin-left: 6px; }
+.thread .turn-a { font-family: var(--sans); font-size: 12px; line-height: 1.6; color: var(--muted); }
+.thread .turn-a p { margin: 0 0 6px; }
+.thread .turn-a p:last-child { margin-bottom: 0; }
+.thread .turn-a ul { margin: 4px 0 6px; padding-left: 14px; }
+.read-as {
+  font-family: var(--mono); font-size: 10px; letter-spacing: 0.05em; color: var(--dim);
+  margin: 0 0 8px; padding: 6px 8px; background: var(--well); border-radius: 2px;
+}
+.read-as b { color: var(--muted); font-weight: 400; }
 .answer h2 {
   margin: 0; font-size: 9.5px; letter-spacing: 0.2em;
   text-transform: uppercase; color: var(--cyan); font-weight: 400;

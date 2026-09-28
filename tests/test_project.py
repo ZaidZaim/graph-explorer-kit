@@ -58,9 +58,15 @@ def test_the_writer_is_configured_from_the_lexical_spec():
 
 
 def test_resolution_is_unscoped_only_where_the_project_owns_the_graph():
+    import dataclasses
+
     owner = load_project("projects.example")
     assert owner.owns_graph is True
-    assert resolution_filter(owner, ["a.md"]) is None
+    # No document scope on an owned graph...
+    clause = resolution_filter(owner, ["a.md"])
+    assert clause is None or "a.md" not in clause
+    # ...only the placeholder exclusion, and nothing at all once that is empty.
+    assert resolution_filter(dataclasses.replace(owner, placeholder_names=()), ["a.md"]) is None
 
 
 def test_resolution_is_scoped_for_an_adopted_graph():
@@ -74,3 +80,42 @@ def test_resolution_is_scoped_for_an_adopted_graph():
     # run merges same-named records the other tool kept apart, irreversibly.
     assert "'new.md'" in clause
     assert adopted.lexical.entity_to_chunk in clause
+
+
+def test_project_scope_resolution_covers_only_this_projects_files():
+    import dataclasses
+
+    adopted = dataclasses.replace(load_project("projects.example"), owns_graph=False)
+    clause = resolution_filter(adopted, None)
+    assert clause is not None
+    # Wider than one run, narrower than the graph: every file stamped with this
+    # project's key at ingest, and nothing the adopted tool wrote.
+    assert f"d.project = {adopted.key!r}" in clause
+    assert adopted.lexical.source_label in clause
+
+
+def test_placeholder_names_are_never_merged():
+    spec = load_project("projects.example")
+    clause = resolution_filter(spec, ["a.md"])
+    assert clause is not None
+    assert "'[redacted]'" in clause
+    assert "toLower(trim(entity.name))" in clause
+
+
+def test_cross_document_resolution_is_confined_to_identity_labels():
+    import dataclasses
+
+    adopted = dataclasses.replace(
+        load_project("projects.example"),
+        owns_graph=False,
+        cross_document_labels=("Organization",),
+    )
+    across = resolution_filter(adopted, None)
+    within = resolution_filter(adopted, ["a.md"])
+    assert across is not None and within is not None
+    # Across documents: only the named labels, only names with a capital or digit.
+    assert "'Organization'" in across
+    assert "[A-Z0-9]" in across
+    # Within one document neither restriction applies.
+    assert "'Organization'" not in within
+    assert "[A-Z0-9]" not in within
