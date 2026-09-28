@@ -475,7 +475,7 @@ def overview(labels: str | None = None) -> dict:
 #: every edge is drawn every frame, and the JSON alone is tens of megabytes.
 #: The most connected records carry the structure, so those are the ones kept,
 #: and the true total goes back with them.
-GRAPH_LIMIT = int(os.getenv("GRAPH_RENDER_LIMIT", "1500"))
+GRAPH_LIMIT = int(os.getenv("GRAPH_RENDER_LIMIT", "400"))
 GRAPH_LIMIT_CEILING = 6000
 
 
@@ -494,13 +494,22 @@ def graph(
     field of unreadable dust around the structure worth looking at. The count
     is reported in /api/meta so the UI can offer them rather than hide them.
 
-    `limit` caps the records returned, most connected first; `shown` and `total`
-    say what was cut. Filtering happens before the cap, so narrowing to one
-    type or one evidence level gets that type's most connected records rather
-    than whatever of it survived a global cut.
+    `limit` caps the records returned; `shown` and `total` say what was cut.
+    Filtering happens before the cap, so narrowing to one type or one evidence
+    level gets that type's most connected records rather than whatever of it
+    survived a global cut.
+
+    Which records make the cut decides whether the result is a picture or a
+    field of dust. The top-N by degree alone is dust: each hub's edges mostly
+    lead to records outside the top N, so four hundred hubs arrive with a few
+    hundred edges among them and no visible structure. Instead a tenth of the
+    budget goes to the most connected records as seeds, and the rest to the
+    neighbours that tie the most seeds together — so what is drawn is the
+    hubs *and* the web between them, which is the complexity worth showing.
     """
     project = spec()
     cap = max(1, min(limit or GRAPH_LIMIT, GRAPH_LIMIT_CEILING))
+    seed_count = max(8, cap // 10)
     wanted_labels = [x for x in (labels or "").split(",") if x] or project.labels
     clauses = ["any(l IN labels(n) WHERE l IN $labels)"]
     params: dict[str, Any] = {"labels": wanted_labels}
@@ -515,17 +524,40 @@ def graph(
         f"MATCH (n:__Entity__) WHERE {' AND '.join(clauses)} RETURN count(n) AS c",
         **params,
     )[0]["c"]
-    records = run(
+    where = " AND ".join(clauses)
+    seeds = run(
         f"""
         MATCH (n:__Entity__)
-        WHERE {' AND '.join(clauses)}
+        WHERE {where}
         WITH n, count {{ (n)-[]-(:__Entity__) }} AS degree
         ORDER BY degree DESC, n.name
-        LIMIT $limit
-        RETURN {node_projection()}
+        LIMIT $seeds
+        RETURN elementId(n) AS id
         """,
-        limit=cap,
+        seeds=min(seed_count, cap),
         **params,
+    )
+    seed_ids = [r["id"] for r in seeds]
+    # The same filters apply to the neighbours (`n` is the variable the clauses
+    # name), so a view narrowed to Agencies draws agencies, not their documents.
+    neighbours = run(
+        f"""
+        MATCH (s:__Entity__) WHERE elementId(s) IN $seed_ids
+        MATCH (s)-[]-(n:__Entity__)
+        WHERE NOT elementId(n) IN $seed_ids AND {where}
+        WITH n, count(DISTINCT s) AS ties, count {{ (n)-[]-(:__Entity__) }} AS degree
+        ORDER BY ties DESC, degree DESC, n.name
+        LIMIT $limit
+        RETURN elementId(n) AS id
+        """,
+        seed_ids=seed_ids,
+        limit=max(0, cap - len(seed_ids)),
+        **params,
+    )
+    ids = seed_ids + [r["id"] for r in neighbours]
+    records = run(
+        f"MATCH (n:__Entity__) WHERE elementId(n) IN $ids RETURN {node_projection()}",
+        ids=ids,
     )
     nodes = [node_dict(r) for r in records]
     return {
@@ -578,9 +610,50 @@ def instances(label: str, limit: int = INSTANCE_LIMIT) -> dict:
     }
 
 
+#: Neighbours pulled in when a node is expanded in place. A hub like "FBI" has
+#: five hundred; drawn all at once they bury the node that was expanded. The
+#: most connected come first, and the total goes back so the note can say
+#: "+60 of 533".
+EXPAND_LIMIT = 60
+
+
 @app.get("/api/expand")
-def expand(id: str) -> dict:
-    return subgraph_for_ids([id], include_neighbours=True)
+def expand(id: str, limit: int = EXPAND_LIMIT) -> dict:
+    """One node, its most connected neighbours up to `limit`, and every edge
+    among them — the unit of Aura-style expansion: double-click, and the
+    graph grows outward from that node without redrawing the rest."""
+    cap = max(1, min(limit, 400))
+    total = run(
+        """
+        MATCH (seed:__Entity__) WHERE elementId(seed) = $id
+        MATCH (seed)-[]-(nbr:__Entity__)
+        RETURN count(DISTINCT nbr) AS c
+        """,
+        id=id,
+    )
+    if not total:
+        raise HTTPException(404, "no such node")
+    records = run(
+        f"""
+        MATCH (seed:__Entity__) WHERE elementId(seed) = $id
+        OPTIONAL MATCH (seed)-[]-(nbr:__Entity__)
+        WITH seed, nbr, count {{ (nbr)-[]-(:__Entity__) }} AS degree
+        ORDER BY degree DESC, nbr.name
+        WITH seed, [x IN collect(DISTINCT nbr) WHERE x IS NOT NULL][..$limit] AS nbrs
+        UNWIND [seed] + nbrs AS n
+        RETURN {node_projection()}
+        """,
+        id=id,
+        limit=cap,
+    )
+    nodes = [node_dict(r) for r in records]
+    return {
+        "nodes": nodes,
+        "relationships": relationships_among([n["id"] for n in nodes]),
+        "seeds": [id],
+        "shown": max(0, len(nodes) - 1),
+        "total": total[0]["c"],
+    }
 
 
 @app.get("/api/search")

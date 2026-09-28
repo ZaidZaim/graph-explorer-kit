@@ -16,7 +16,7 @@
  * back to a built-in canvas renderer so the demo still works.
  */
 
-import { createRenderer } from '/static/renderer.js?v=6';
+import { createRenderer } from '/static/renderer.js?v=7';
 
 const $ = (id) => document.getElementById(id);
 const api = async (path, opts) => {
@@ -113,7 +113,7 @@ const typeRadius = (count, max) => 11 + 26 * Math.sqrt(count / Math.max(max, 1))
 
 const CAPTIONS = {
   graph: 'One node per record type, sized by how many records carry it. Click a type to open its records.',
-  graphAll: 'The most connected records, up to the limit in the rail. Zoom in for names, or hover a node.',
+  graphAll: 'The most connected records, up to the limit in the rail. Double-click a node to pull in its connections; click for details.',
   graphType: 'The most connected records of one type, with what they link to. Click one to open it.',
   graphRecord: 'One record and everything it links to, with each relationship named.',
   schema: 'The POLE model this corpus is held to. Node size is how many records carry that type.',
@@ -129,10 +129,10 @@ const state = {
   // 'record' are the drill-downs from the overview. The graph opens on the
   // records: one node per type is what the Schema tab already shows, and the
   // Graph tab should be the graph.
-  graphMode: 'overview',
+  graphMode: 'all',
   // How many of the most connected records the records view draws. The
   // server caps it too; this is the reader's choice within that cap.
-  graphLimit: Number(localStorage.getItem('graphrag.limit')) || 1500,
+  graphLimit: Number(localStorage.getItem('graphrag.limit')) || 400,
   // The conversation this tab is in. Minted on the first question, kept
   // across reloads so the thread comes back, replaced by 'new'.
   sessionId: localStorage.getItem('graphrag.session') || null,
@@ -174,7 +174,7 @@ async function boot() {
     startClock();
     loadSources();
     $('graph-limit').value = String(state.graphLimit);
-    if (!$('graph-limit').value) { state.graphLimit = 1500; $('graph-limit').value = '1500'; }
+    if (!$('graph-limit').value) { state.graphLimit = 400; $('graph-limit').value = '400'; }
     $('dock-blurb').textContent = state.meta.memory
       ? 'Ask, then follow up. The agent reads the thread; other retrievers get the follow-up rewritten. Conversations are kept in Neo4j.'
       : 'Ask, then follow up. The thread lasts while the server runs.';
@@ -182,6 +182,7 @@ async function boot() {
     setLoading('Loading the graph…');
     state.renderer = await createRenderer($('graph'), {
       onNodeClick: showDetails,
+      onNodeDoubleClick: expandNode,
       onBackgroundClick: hideDetails,
       // Chunk is not a schema label, so the project palette has no colour for
       // it — but it is a ring in every unfold.
@@ -609,8 +610,11 @@ async function showDetails(nodeId) {
 
   if (node.label === 'Chunk') { showChunkDetails(node); return; }
 
+  // In the type drill-down, clicking a record opens it as its own picture — the
+  // third level of types → records → record. In the records view the graph
+  // stays put: click reads, double-click (or Expand) grows it.
   const unfolding = !$('answer').hidden;
-  if (state.view === 'graph' && !unfolding && state.focused !== nodeId) {
+  if (state.view === 'graph' && !unfolding && state.graphMode === 'type' && state.focused !== nodeId) {
     focusRecord(nodeId);
   }
 
@@ -938,6 +942,40 @@ async function askQuestion() {
   }
 }
 
+/* ---------------- expanding the graph in place ---------------- */
+
+/** Pull one record's most connected neighbours into the graph on screen.
+ *
+ *  This is the Aura gesture: the graph grows outward from the node you chose,
+ *  and everything already drawn stays where it is. Nothing is capped away
+ *  silently — the note says "+60 of 533" when a hub has more. */
+async function expandNode(nodeId) {
+  if (state.view !== 'graph') return;
+  if (state.graphMode === 'overview') return drillInto(nodeId);
+  let data;
+  try {
+    data = await api(`/api/expand?id=${encodeURIComponent(nodeId)}&limit=60`);
+  } catch (err) {
+    console.error(err);
+    return;
+  }
+  const known = new Set(state.graph.nodes.map((n) => n.id));
+  const relIds = new Set(state.graph.relationships.map((r) => r.id));
+  const freshNodes = data.nodes.filter((n) => !known.has(n.id));
+  state.graph = {
+    nodes: state.graph.nodes.concat(freshNodes),
+    relationships: state.graph.relationships.concat(
+      data.relationships.filter((r) => !relIds.has(r.id))),
+  };
+  const added = state.renderer.expand(nodeId, data) ?? freshNodes.length;
+  const anchor = data.nodes.find((n) => n.id === nodeId);
+  const more = data.total > data.shown ? ` (${data.shown} of ${data.total} connections)` : '';
+  setNote(added
+    ? `Expanded ${anchor?.name ?? 'record'}: +${added} records${more}`
+    : `${anchor?.name ?? 'This record'}: every connection is already on screen${more}`);
+  state.renderer.select(nodeId);
+}
+
 /* ---------------- conversations ---------------- */
 
 function startSession() {
@@ -1174,12 +1212,12 @@ function wireEvents() {
     // the button is clicked; the refresh that follows re-syncs it with the
     // server, which on a remote Aura instance can take a few seconds.
     state.renderer?.collapse();
-    await setGraphMode('overview');
+    await setGraphMode('all');
   });
   $('reset-view').addEventListener('click', async () => {
     closeAnswer();
     state.newIds = new Set();
-    state.graphMode = 'overview';
+    state.graphMode = 'all';
     state.drilledInto = null;
     state.focused = null;
     await setView('graph');
@@ -1192,11 +1230,12 @@ function wireEvents() {
   }
 
   $('graph-limit').addEventListener('change', (e) => {
-    state.graphLimit = Number(e.target.value) || 1500;
+    state.graphLimit = Number(e.target.value) || 400;
     try { localStorage.setItem('graphrag.limit', String(state.graphLimit)); } catch {}
     if (state.graphMode === 'all') refreshGraph();
   });
   $('new-conversation').addEventListener('click', newConversation);
+  $('expand-node').addEventListener('click', () => { if (state.selected) expandNode(state.selected); });
 
   $('isolated-toggle').addEventListener('click', (e) => {
     state.showIsolated = !state.showIsolated;

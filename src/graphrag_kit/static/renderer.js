@@ -513,6 +513,37 @@ function createCanvasRenderer(container, opts) {
     }
   }
 
+  /** Grow the standing graph around one node: merge `graph` in, place the new
+   *  nodes just outside the anchor so they visibly come from it, and let the
+   *  layout settle. Unlike an unfold nothing is ghosted and nothing is
+   *  transient — expanded nodes join the base graph and survive an answer. */
+  function expand(anchorId, graph) {
+    const anchor = byId.get(anchorId);
+    const known = new Set(nodes.map((n) => n.id));
+    mergeGraph(graph);
+    const fresh = nodes.filter((n) => !known.has(n.id));
+    const k = spacing();
+    fresh.forEach((n, i) => {
+      const from = anchor ?? { x: 0, y: 0 };
+      const angle = (i / Math.max(1, fresh.length)) * Math.PI * 2 + Math.random() * 0.4;
+      const reach = k * (1.2 + 0.6 * Math.random());
+      n.x = from.x + Math.cos(angle) * reach;
+      n.y = from.y + Math.sin(angle) * reach;
+      n.vx = n.vy = 0;
+      n.appear = 0;
+      n.targetAppear = revealed ? GHOST_ALPHA : 1;
+      n.pinned = !!revealed;
+      baseIds.add(n.id);
+      if (revealed) { revealed.add(n.id); stageOf.set(n.id, stageOf.get(anchorId) ?? 1); n.pinned = false; n.targetAppear = 1; }
+    });
+    if (anchor) { anchor.pinned = true; setTimeout(() => { anchor.pinned = isGhost(anchor); }, 1400); }
+    for (const e of edges) if (revealed) e.revealed = revealed.has(e.from) && revealed.has(e.to);
+    alpha = Math.max(alpha, 0.8);
+    const focusSet = [anchor, ...fresh].filter(Boolean);
+    for (const delay of [400, 1400]) setTimeout(() => easeCameraTo(focusSet), delay);
+    return fresh.length;
+  }
+
   function collapse() {
     revealed = null;
     stageOf = new Map();
@@ -1026,6 +1057,15 @@ function createCanvasRenderer(container, opts) {
 
   canvas.addEventListener('pointerleave', () => { hovered = null; });
 
+  // Double-click expands: the graph grows outward from that node, the way
+  // Aura's does, rather than being replaced by its neighbourhood.
+  canvas.addEventListener('dblclick', (ev) => {
+    const rect = canvas.getBoundingClientRect();
+    const p = toWorld(ev.clientX - rect.left, ev.clientY - rect.top);
+    const hit = pick(p.x, p.y);
+    if (hit) opts.onNodeDoubleClick?.(hit.id);
+  });
+
   canvas.addEventListener('wheel', (ev) => {
     ev.preventDefault();
     const rect = canvas.getBoundingClientRect();
@@ -1121,6 +1161,7 @@ function createCanvasRenderer(container, opts) {
     },
     beginUnfold,
     addStage,
+    expand,
     /** One-shot unfold, for views that have no pipeline to follow. */
     unfold(graph) {
       beginUnfold();
@@ -1215,6 +1256,9 @@ async function createNvlRenderer(container, opts) {
   const click = new ClickInteraction(nvl);
   click.updateCallback('onNodeClick', (node) => opts.onNodeClick?.(node.id));
   click.updateCallback('onCanvasClick', () => opts.onBackgroundClick?.());
+  try {
+    click.updateCallback('onNodeDoubleClick', (node) => opts.onNodeDoubleClick?.(node.id));
+  } catch { /* older NVL builds have no double-click callback */ }
 
   let current = { nodes: [], relationships: [] };
   let base = { nodes: [], relationships: [] };
@@ -1283,6 +1327,19 @@ async function createNvlRenderer(container, opts) {
     setInsets() { /* NVL owns its own viewport */ },
     select(id) { selected = id; paint(); },
     focus(id) { nvl.fit([id]); },
+    expand(anchorId, graph) {
+      const before = current.nodes.length;
+      const known = new Set(current.nodes.map((n) => n.id));
+      const relIds = new Set(current.relationships.map((r) => r.id));
+      current = {
+        nodes: current.nodes.concat(graph.nodes.filter((n) => !known.has(n.id))),
+        relationships: current.relationships.concat(
+          graph.relationships.filter((r) => !relIds.has(r.id))),
+      };
+      paint();
+      setTimeout(() => nvl.fit([anchorId, ...graph.nodes.map((n) => n.id)]), 200);
+      return current.nodes.length - before;
+    },
     refit: fitAll,
     fit: fitAll,
   };

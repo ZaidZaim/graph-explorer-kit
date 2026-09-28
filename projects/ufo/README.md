@@ -184,17 +184,19 @@ graphrag-agent --show-tools "Which agencies investigated the most events?"
 
 Three views over the one graph:
 
-* **Graph** — opens on `Types`: one node per type, sized by how many records
-  carry it, with each edge weighted by the relationships it stands for
-  (`MENTIONS ×37,937`) — Document mentions everything, Observation hangs off
-  Event, Witness hangs off Observation. Click a type for its most connected
-  records, then click one of *those* for a single record drawn the way Aura
-  draws it: the record in the middle, its neighbours around it, and every
-  relationship named. `Records` draws the records themselves, most connected
-  first, up to a limit in the rail — 54,000 at once is not a picture, it is a
-  tab that stops responding. Records with no relationship at all (13,965, the
-  residue of extraction finding a place name in a scanned table with nothing
-  to attach it to) are hidden by default and counted.
+* **Graph** — opens on the records themselves, most connected first, up to a
+  limit in the rail (400 by default): the FBI, USCENTCOM, the Air Force and
+  the documents that mention them, as the graph they form. Double-click any
+  record, or press `expand`, and its connections grow out of it in place, the
+  way Aura expands a node — 54,000 records at once is not a picture, it is a
+  tab that stops responding, so the complexity is reached by growing the graph
+  from the node you care about. `Types` rolls the same graph up to one node
+  per type with weighted edges (`MENTIONS ×37,937`) — Document mentions
+  everything, Observation hangs off Event, Witness hangs off Observation —
+  and clicking a type opens its most connected records. Records with no
+  relationship at all (13,965, the residue of extraction finding a place name
+  in a scanned table with nothing to attach it to) are hidden by default and
+  counted.
 * **Schema** — the POLE model, one node per type, sized by how many records
   carry it, with the patterns the schema licenses as edges. Click a type for its
   properties and their meanings. This is the view for explaining the model.
