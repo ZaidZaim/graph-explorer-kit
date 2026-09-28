@@ -184,16 +184,17 @@ graphrag-agent --show-tools "Which agencies investigated the most events?"
 
 Three views over the one graph:
 
-* **Graph** — every record, as the graph they form. Records with no
-  relationship at all are hidden by default and counted in the rail: there are
-  ~365, the residue of extraction finding a place name in a scanned table with
-  nothing to attach it to. `Types` rolls the same graph up to one node per type,
-  sized by how many records carry it, with each edge weighted by the
-  relationships it stands for (`MENTIONS ×349`) — Document mentions everything,
-  Observation hangs off Event, Witness hangs off Observation. Click a type for
-  its most connected records, then click one of *those* for a single record
-  drawn the way Aura draws it: the record in the middle, its neighbours around
-  it, and every relationship named.
+* **Graph** — opens on `Types`: one node per type, sized by how many records
+  carry it, with each edge weighted by the relationships it stands for
+  (`MENTIONS ×37,937`) — Document mentions everything, Observation hangs off
+  Event, Witness hangs off Observation. Click a type for its most connected
+  records, then click one of *those* for a single record drawn the way Aura
+  draws it: the record in the middle, its neighbours around it, and every
+  relationship named. `Records` draws the records themselves, most connected
+  first, up to a limit in the rail — 54,000 at once is not a picture, it is a
+  tab that stops responding. Records with no relationship at all (13,965, the
+  residue of extraction finding a place name in a scanned table with nothing
+  to attach it to) are hidden by default and counted.
 * **Schema** — the POLE model, one node per type, sized by how many records
   carry it, with the patterns the schema licenses as edges. Click a type for its
   properties and their meanings. This is the view for explaining the model.
@@ -212,6 +213,13 @@ ceiling — about thirty nodes — which is what lets an answer's evidence be dr
 the same way as the type overview: every circle named, every relationship typed.
 The labels say what was cut ("16 of 107 records extracted from them"), and the
 answer itself carries the detail the picture leaves out.
+
+**Ask, then follow up.** The chat column is a conversation: "Which agencies
+investigated events over New Mexico?" then "and which of those appear in the
+2020s mission reports?" works, because the agent reads the thread and the
+fixed retrievers get the follow-up rewritten into a standalone question. The
+thread is stored in the same Aura instance as the graph, as `Message` and
+`ReasoningTrace` nodes, and survives a reload or a restart.
 
 **Extend the graph** in the rail takes a `.md` or `.pdf` file, runs the same
 pipeline, schema and extraction rules that built the corpus, and lights up what

@@ -31,6 +31,9 @@ ocr = [
     "pillow>=10",
     "pypdfium2>=4.30",
 ]
+memory = [
+    "neo4j-agent-memory[microsoft-agent]>=0.6.0",
+]
 
 [project.scripts]
 graphrag-setup = "graphrag_kit.setup_indexes:main"

@@ -299,16 +299,79 @@ Model configuration is shared with everything else — same deployment, same Ent
 or key auth — except for the API version, which it sets itself. See
 `AGENT_CHAT_API` in [.env.example](.env.example).
 
+## Conversations and memory
+
+The second question is always a follow-up — "and in 1949?", "which of those
+had radar?", "show me the other document" — and a demo that answers each
+question as if it were the first cannot hold a conversation. So the explorer
+and `graphrag-agent --chat` keep one, and with
+[`neo4j-agent-memory`](https://neo4j.com/labs/agent-memory/) installed
+(`uv sync --extra memory`) they keep it in Neo4j, in the same instance as the
+knowledge graph. [memory.py](src/graphrag_kit/memory.py) is the seam.
+
+What a conversation gives you:
+
+- **Follow-ups the agent understands.** Each conversation is an Agent Framework
+  session whose history provider reads and writes Neo4j, so the agent sees the
+  earlier turns and a restarted server resumes the thread. It also gets a
+  `recall_conversations` tool that searches every earlier conversation, so
+  "what did I ask last week about Socorro?" is answerable.
+- **Follow-ups for the fixed retrievers too**, by a cheaper route: before a
+  `hybrid-cypher` question is embedded, the recent turns are used to rewrite it
+  into one that stands alone, and the rewrite is shown ("Read as …") so nothing
+  happens silently.
+- **A transcript that outlives the tab.** The browser keeps its session id in
+  local storage and rebuilds the thread from `GET /api/conversations/{id}` on
+  reload. `new` starts another thread; the old one stays stored.
+- **State history.** Every agent turn is recorded as a reasoning trace — the
+  question, the tools it called in order, the answer — as nodes next to the
+  messages. `MATCH (t:ReasoningTrace)-[:HAS_STEP]->(s) RETURN t.task, s.action`
+  is the agent's working, queryable like everything else.
+
+From the terminal:
+
+```bash
+uv run graphrag-agent --chat                       # a new conversation
+uv run graphrag-agent --chat --session demo-night  # resume, or name, one
+uv run graphrag-agent --session demo-night --forget --chat
+```
+
+Two things are deliberate. Memory does **not** extract entities from the
+conversation into long-term memory: the package can, but its POLE+O labels
+(`Person`, `Location`, `Event`) are this project's schema labels too, and a
+question mentioning Roswell must not create a `Location` next to the ones the
+documents produced. Messages and traces are the memory; the knowledge graph
+stays the documents'. And memory is optional: `AGENT_MEMORY=off` runs without
+it (history then lives in the server process), `AGENT_MEMORY=on` refuses to
+start without the package, and `NAMS_API_KEY` switches the store from this
+Neo4j instance to the hosted Neo4j Agent Memory Service — early-access, and
+wired up here but not exercised.
+
 ## The explorer
 
 Three views over the one graph, switched in the masthead:
 
 | View | What it shows |
 |---|---|
-| **Graph** | The records, by default — every one of them, as the graph they form. `Types` rolls it up to one node per label, sized by how many records carry it and with edges weighted by how many relationships they stand for; click a type for its records, then click a record for itself, its neighbours and every relationship named. |
+| **Graph** | Opens on `Types`: one node per label, sized by how many records carry it, with edges weighted by how many relationships they stand for. Click a type for its most connected records, then click a record for itself, its neighbours and every relationship named. `Records` draws the records themselves — the most connected ones, up to a limit set in the rail (500 to 6,000; default 1,500), with the true total alongside. |
 | **Schema** | The project's model — one node per type, sized by how many records carry it, with the patterns the schema licenses as edges. Click a type for its properties and their meanings. This is the view for explaining the model to someone. |
 | **Timeline** | Entities carrying the project's `date_property`, in order. Hidden when the project declares none. |
 
+- **Big graphs stay responsive.** A corpus of a few hundred documents extracts
+  to tens of thousands of records, and a browser asked to lay out and draw all
+  of them at once stops responding. So nothing ever asks it to: the explorer
+  opens on the type overview, `/api/graph` ranks by connectedness and returns
+  the top `limit` records (default 1,500, ceiling 6,000, `GRAPH_RENDER_LIMIT`
+  to change the default), the drill-downs were always capped, and the timeline
+  lists the 600 most connected dated records. Every capped view says what it
+  cut — "1,500 of 40,079 records, most connected first" — so the picture is
+  never mistaken for the whole. Filters apply before the cap, so narrowing to
+  one type gets that type's most connected records rather than whatever of it
+  survived a global cut.
+- **Ask, then follow up.** The chat column is a conversation, not a single
+  answer: earlier turns stay above the live one, "and in 1949?" is understood
+  against them, and `new` starts another thread. See **Conversations and
+  memory** for what is remembered and where.
 - **Full screen for demos.** The control in the masthead, or the F key, puts
   the explorer on the whole display, so the browser's address bar and the OS
   taskbar leave the stage. Esc brings them back.
@@ -392,21 +455,31 @@ also the shortest path to putting your own front-end on the graph:
 | `GET /api/schema` | The project's schema **as a graph** — one node per type with its properties and live count, one edge per pattern. The model itself, queryable. |
 | `GET /api/overview?labels=` | The graph rolled up by type: one node per label, one weighted edge per (label, type, label) actually present. Unlike `/api/schema` this counts the data, so a pattern the schema allows but the corpus never uses does not appear. |
 | `GET /api/instances?label=&limit=` | The drill-down: that type's most connected records plus their neighbours, with the true total alongside. |
-| `GET /api/graph?labels=&status=&connected=` | The entity graph, comma-separated filters. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
+| `GET /api/graph?labels=&status=&connected=&limit=` | The entity graph, comma-separated filters, most connected first up to `limit` (default 1,500, ceiling 6,000) with `shown` and `total` alongside. `connected=false` includes entities that take part in no relationship; they are excluded by default and counted in `/api/meta` as `isolated`. |
 | `GET /api/expand?id=` | One node plus its direct neighbours and the edges among them. |
 | `GET /api/search?q=&limit=` | Entity fulltext search. `limit` defaults to 15. Terms are Lucene-escaped, so a half-typed query is a search rather than a 500. |
-| `GET /api/timeline` | Entities carrying the project's `date_property`, in order. |
+| `GET /api/timeline?limit=` | The most connected entities carrying the project's `date_property`, in date order, with `shown` and `total`. |
+| `GET /api/conversations` | Stored conversations, newest first: id, first question, size. |
+| `POST /api/conversations` | Mint a conversation id. Nothing is stored until the first question. |
+| `GET /api/conversations/{id}` | The transcript, oldest first — what the browser rebuilds its thread from. |
+| `DELETE /api/conversations/{id}` | Forget a conversation: its messages, its reasoning traces, and the agent holding it. |
 | `GET /api/documents` | The corpus behind the graph: each source file with its passage and record counts. |
 | `POST /api/documents` | **Extend the graph.** Multipart upload; runs the same pipeline, schema and extraction rules over the new file and streams stages as SSE, ending with the subgraph it added. |
 | `POST /api/ask` | Answer, retrieved context, and evidence subgraph, as one JSON body. |
 | `POST /api/ask/stream` | The same work as Server-Sent Events, one event per stage. |
 
-Both ask routes take the same body — `retriever` and `top_k` are optional, and
-`top_k` is capped at 25:
+Both ask routes take the same body — `retriever`, `top_k` and `session_id` are
+optional, and `top_k` is capped at 25:
 
 ```json
-{ "question": "...", "retriever": "hybrid-cypher", "top_k": 5 }
+{ "question": "...", "retriever": "hybrid-cypher", "top_k": 5, "session_id": "…" }
 ```
+
+With a `session_id` the question is a turn in that conversation (see
+**Conversations and memory**); without one it is answered on its own, exactly
+as before conversations existed. The answer carries the `session_id` back and,
+for the fixed retrievers, `interpreted`: the standalone question a follow-up was
+rewritten to, or `null` when it was taken as asked.
 
 The stream emits five event types. `stage` announces what is running; `unfold`
 carries one ring of nodes and relationships (`evidence`, `entities`, then
@@ -679,6 +752,7 @@ src/graphrag_kit/
   retrievers.py       five retrievers, retrieval_query, RAG prompt
   ask.py              terminal client                -> graphrag-ask
   agent.py            retrievers as agent tools      -> graphrag-agent
+  memory.py           conversations + memory in Neo4j (neo4j-agent-memory)
   server.py           FastAPI + JSON/SSE API         -> graphrag-serve
   reset.py            scoped teardown                -> graphrag-reset
   static/             explorer front-end (no build step)

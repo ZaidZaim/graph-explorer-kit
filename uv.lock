@@ -421,6 +421,9 @@ dev = [
     { name = "pytest" },
     { name = "ruff" },
 ]
+memory = [
+    { name = "neo4j-agent-memory", extra = ["microsoft-agent"] },
+]
 ocr = [
     { name = "pillow" },
     { name = "pypdfium2" },
@@ -433,6 +436,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "langchain-text-splitters", specifier = ">=0.3.0" },
     { name = "neo4j", specifier = ">=5.28.0" },
+    { name = "neo4j-agent-memory", extras = ["microsoft-agent"], marker = "extra == 'memory'", specifier = ">=0.6.0" },
     { name = "neo4j-graphrag", specifier = ">=1.19.0" },
     { name = "openai", specifier = ">=2.25.0" },
     { name = "pillow", marker = "extra == 'ocr'", specifier = ">=10" },
@@ -443,7 +447,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.9.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32.0" },
 ]
-provides-extras = ["dev", "ocr"]
+provides-extras = ["dev", "ocr", "memory"]
 
 [[package]]
 name = "distro"
@@ -888,6 +892,26 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/9d/57/f939c3b9b28e5851095eafb823b5a996eea3f21a14be513bcf9b355f97da/neo4j-6.3.0.tar.gz", hash = "sha256:d0d3986c37ad174a549a39dfec6d22a00a061ebcb0267f1a5caf856589838e73", size = 242487, upload-time = "2026-08-28T10:25:04.743Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/47/47/d29d93455fe2959e5b8383e52f68b3633d729f39e87fef94743f9f2240ae/neo4j-6.3.0-py3-none-any.whl", hash = "sha256:d243f9c8adf882ae7205a76eb2419b0a632d5f3c89383d4a0044d737a2223991", size = 331471, upload-time = "2026-08-28T10:25:03.263Z" },
+]
+
+[[package]]
+name = "neo4j-agent-memory"
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "neo4j" },
+    { name = "pydantic" },
+    { name = "pydantic-settings" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/31/c3/72c5ff2205171bc7bf71d3a5bb9ae3d2f4880d5f97d45da3c5c54edd01ae/neo4j_agent_memory-0.6.0.tar.gz", hash = "sha256:430b78188171e10140d7ddbdadb9acf716ca6853db95aa3f576105608c64054d", size = 395860, upload-time = "2026-09-14T18:05:00.301Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/25/47/9ba0af8cca3c6b23c7c6278e6c70597770045fcdfc8152a889df62344d2c/neo4j_agent_memory-0.6.0-py3-none-any.whl", hash = "sha256:759664a5a95c4dcca4e932b2107fbcbecbb6cff56abc94b510e735b06d630ccb", size = 481415, upload-time = "2026-09-14T18:04:58.549Z" },
+]
+
+[package.optional-dependencies]
+microsoft-agent = [
+    { name = "agent-framework-core" },
 ]
 
 [[package]]
@@ -1438,6 +1462,20 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/c2/d7/ad493864a7fb21c0c4df98f965e2db430cb25a9d7369b5778d5016c09fd9/pydantic_core-2.46.5-pp311-pypy311_pp73-musllinux_1_1_armv7l.whl", hash = "sha256:2d330aaba8621b1edcec8ae2c4050f63b84ccf6d98723a8f212e9684713abf0e", size = 2294560, upload-time = "2026-08-28T10:01:23.495Z" },
     { url = "https://files.pythonhosted.org/packages/02/8e/b41c84c913f29973a268e6c2b5bbf13c95adb9956c126d10da11ba3b2bef/pydantic_core-2.46.5-pp311-pypy311_pp73-musllinux_1_1_x86_64.whl", hash = "sha256:b6acfb46a814762367fb7ba0828b0a17d441b92ce249a0e007474c9072662dda", size = 2317531, upload-time = "2026-08-28T10:01:26.334Z" },
     { url = "https://files.pythonhosted.org/packages/db/1d/068464f23075f66a8f1b806935e9cd9363ee446636ea70d2c22ee8659dbf/pydantic_core-2.46.5-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:d0a24b40877af2de4950252be9d21eaf7fb07660f3c2cae1f56c6b599ada5266", size = 2140686, upload-time = "2026-08-28T10:01:28.947Z" },
+]
+
+[[package]]
+name = "pydantic-settings"
+version = "2.15.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "pydantic" },
+    { name = "python-dotenv" },
+    { name = "typing-inspection" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/68/ca/31c57507b13119d7d3cfa1576dad2911a4861e3be07b579395f4e9d393f9/pydantic_settings-2.15.0.tar.gz", hash = "sha256:694b793e84f766ba76a90ebdefc01d0a9a045dab0382bee70393da93712ad117", size = 261253, upload-time = "2026-08-07T09:24:57.419Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/30/a4/2bffa9f8e804325a09867f0e9d30795c80ea9f8d62560bd1b6ad6220eb2f/pydantic_settings-2.15.0-py3-none-any.whl", hash = "sha256:0ba092c291c94baceb5eff768aa0d56400a457585bc0175925a5a5510303da42", size = 69413, upload-time = "2026-08-07T09:24:55.839Z" },
 ]
 
 [[package]]

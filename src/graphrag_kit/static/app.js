@@ -113,7 +113,7 @@ const typeRadius = (count, max) => 11 + 26 * Math.sqrt(count / Math.max(max, 1))
 
 const CAPTIONS = {
   graph: 'One node per record type, sized by how many records carry it. Click a type to open its records.',
-  graphAll: 'Every extracted record. Zoom in for names, or hover a node.',
+  graphAll: 'The most connected records, up to the limit in the rail. Zoom in for names, or hover a node.',
   graphType: 'The most connected records of one type, with what they link to. Click one to open it.',
   graphRecord: 'One record and everything it links to, with each relationship named.',
   schema: 'The POLE model this corpus is held to. Node size is how many records carry that type.',
@@ -129,7 +129,16 @@ const state = {
   // 'record' are the drill-downs from the overview. The graph opens on the
   // records: one node per type is what the Schema tab already shows, and the
   // Graph tab should be the graph.
-  graphMode: 'all',
+  graphMode: 'overview',
+  // How many of the most connected records the records view draws. The
+  // server caps it too; this is the reader's choice within that cap.
+  graphLimit: Number(localStorage.getItem('graphrag.limit')) || 1500,
+  // The conversation this tab is in. Minted on the first question, kept
+  // across reloads so the thread comes back, replaced by 'new'.
+  sessionId: localStorage.getItem('graphrag.session') || null,
+  // The turn currently shown in #answer-body, moved into the thread when
+  // the next question is asked.
+  currentTurn: null,
   drilledInto: null,
   focused: null,
   activeLabels: new Set(),
@@ -164,6 +173,11 @@ async function boot() {
     buildExamples();
     startClock();
     loadSources();
+    $('graph-limit').value = String(state.graphLimit);
+    if (!$('graph-limit').value) { state.graphLimit = 1500; $('graph-limit').value = '1500'; }
+    $('dock-blurb').textContent = state.meta.memory
+      ? 'Ask, then follow up. The agent reads the thread; other retrievers get the follow-up rewritten. Conversations are kept in Neo4j.'
+      : 'Ask, then follow up. The thread lasts while the server runs.';
 
     setLoading('Loading the graph…');
     state.renderer = await createRenderer($('graph'), {
@@ -184,6 +198,7 @@ async function boot() {
     window.__graphrag = { state, renderer: state.renderer };
     await refreshGraph();
     setLoading(null);
+    restoreConversation();
   } catch (err) {
     console.error(err);
     setLoading(`Failed to start: ${err.message}`);
@@ -469,12 +484,17 @@ async function refreshGraph() {
       ? `${state.drilledInto}: ${data.shown} of ${data.total} records, most connected first`
       : `${state.drilledInto}: all ${data.total} records`);
   } else {
-    state.graph = await api(
+    const data = await api(
       `/api/graph?labels=${encodeURIComponent(labels)}&status=${encodeURIComponent(status)}` +
-      `&connected=${state.showIsolated ? 'false' : 'true'}`);
-    setNote(state.showIsolated || !state.meta.isolated
+      `&connected=${state.showIsolated ? 'false' : 'true'}&limit=${state.graphLimit}`);
+    state.graph = { nodes: data.nodes, relationships: data.relationships };
+    const cut = data.total > data.shown
+      ? `${data.shown.toLocaleString()} of ${data.total.toLocaleString()} records, most connected first`
+      : null;
+    const hidden = state.showIsolated || !state.meta.isolated
       ? null
-      : `${state.meta.isolated} unlinked records hidden`);
+      : `${state.meta.isolated.toLocaleString()} unlinked hidden`;
+    setNote([cut, hidden].filter(Boolean).join(' · ') || null);
   }
 
   $('graph-empty').hidden = state.graph.nodes.length > 0;
@@ -547,7 +567,9 @@ async function showTimeline() {
   for (const n of res.nodes) state.unfoldNodes.set(n.id, n);
   $('answer').hidden = false;
   $('examples').hidden = true;
-  $('answer-title').textContent = `Timeline · ${res.nodes.length} dated events`;
+  $('answer-title').textContent = res.total > res.shown
+    ? `Timeline · ${res.shown} of ${res.total} dated events, most connected`
+    : `Timeline · ${res.nodes.length} dated events`;
   $('progress').hidden = true;
   $('answer-body').className = 'log';
   $('answer-body').innerHTML = res.nodes.map((n) =>
@@ -819,14 +841,20 @@ async function askQuestion() {
   const btn = $('ask-button');
   btn.disabled = true;
   btn.textContent = 'Working';
+  // The previous turn joins the thread; this one takes the live slot.
+  archiveCurrentTurn();
+  if (!state.sessionId) startSession();
   $('answer').hidden = false;
   $('examples').hidden = true;
-  $('answer-title').textContent = 'Answer';
+  $('answer-title').textContent = state.currentTurn || $('thread').childElementCount
+    ? 'Conversation' : 'Answer';
   $('answer-body').className = '';
   $('context-details').hidden = false;
   syncInsets();
   $('answer-body').innerHTML = '';
   $('answer-context').innerHTML = '';
+  $('question').value = '';
+  const retriever = $('retriever').value;
   // The note describes the standing view ("Sensor: 3 direct connections"), which
   // is not what is on screen once an unfold starts.
   setNote(null);
@@ -851,7 +879,7 @@ async function askQuestion() {
 
   try {
     await streamEvents('/api/ask/stream',
-      postJson({ question, retriever: $('retriever').value, top_k: 5 }),
+      postJson({ question, retriever, top_k: 5, session_id: state.sessionId }),
       (name, data) => {
         if (name === 'stage') {
           beat.push(() => { setStage(data.label); markProgress(Math.min(step++, PROGRESS_STEPS - 1)); });
@@ -872,7 +900,11 @@ async function askQuestion() {
           answered = true;
           beat.push(() => {
             finishProgress();
-            $('answer-body').innerHTML = markEvidence(renderMarkdown(data.answer));
+            const readAs = data.interpreted
+              ? `<p class="read-as">Read as <b>${escapeHtml(data.interpreted)}</b></p>` : '';
+            $('answer-body').innerHTML = readAs + markEvidence(renderMarkdown(data.answer));
+            state.currentTurn = { question, answer: data.answer, retriever, interpreted: data.interpreted };
+            $('answer').scrollTop = $('answer').scrollHeight;
             $('answer-context').innerHTML = data.context.length
               ? data.context.map((c) => `<pre>${escapeHtml(c)}</pre>`).join('')
               : '<pre>(no context returned)</pre>';
@@ -904,6 +936,79 @@ async function askQuestion() {
     btn.disabled = false;
     btn.textContent = 'Ask';
   }
+}
+
+/* ---------------- conversations ---------------- */
+
+function startSession() {
+  const id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now())).replace(/-/g, '');
+  state.sessionId = id;
+  try { localStorage.setItem('graphrag.session', id); } catch {}
+}
+
+/** Move whatever is in the live answer slot into the thread above it. */
+function archiveCurrentTurn() {
+  const turn = state.currentTurn;
+  if (!turn) return;
+  appendTurn(turn);
+  state.currentTurn = null;
+}
+
+function appendTurn({ question, answer, retriever }) {
+  const thread = $('thread');
+  const el = document.createElement('div');
+  el.className = 'turn';
+  el.innerHTML =
+    `<p class="turn-q">${escapeHtml(question)}` +
+    (retriever ? `<span class="via">· ${escapeHtml(retriever)}</span>` : '') + '</p>' +
+    `<div class="turn-a">${markEvidence(renderMarkdown(answer || ''))}</div>`;
+  thread.appendChild(el);
+  thread.hidden = false;
+}
+
+/** After a reload: the thread comes back from the server, live answer last. */
+async function restoreConversation() {
+  if (!state.sessionId) return;
+  let turns = [];
+  try {
+    turns = (await api(`/api/conversations/${encodeURIComponent(state.sessionId)}`)).turns;
+  } catch (err) {
+    console.warn('could not restore the conversation', err);
+    return;
+  }
+  const pairs = [];
+  for (const t of turns) {
+    if (t.role === 'user') pairs.push({ question: t.content, answer: '', retriever: t.retriever });
+    else if (pairs.length) pairs[pairs.length - 1].answer = t.content;
+  }
+  if (!pairs.length) return;
+  $('thread').innerHTML = '';
+  for (const pair of pairs.slice(0, -1)) appendTurn(pair);
+  const last = pairs[pairs.length - 1];
+  $('answer').hidden = false;
+  $('examples').hidden = true;
+  $('answer-title').textContent = 'Conversation';
+  $('progress').hidden = true;
+  $('answer-body').className = '';
+  $('answer-body').innerHTML =
+    `<p class="turn-q">${escapeHtml(last.question)}</p>` + markEvidence(renderMarkdown(last.answer));
+  $('answer-context').innerHTML = '';
+  $('context-details').hidden = true;
+  state.currentTurn = last;
+  syncInsets();
+  $('answer').scrollTop = $('answer').scrollHeight;
+}
+
+/** A fresh thread. The old one is not deleted: it stays in memory, listed by
+ *  GET /api/conversations and resumable from the CLI with --session. */
+function newConversation() {
+  startSession();
+  state.currentTurn = null;
+  $('thread').innerHTML = '';
+  $('thread').hidden = true;
+  closeAnswer();
+  state.renderer?.collapse();
+  $('question').focus();
 }
 
 /* ---------------- extending the graph ---------------- */
@@ -1069,12 +1174,12 @@ function wireEvents() {
     // the button is clicked; the refresh that follows re-syncs it with the
     // server, which on a remote Aura instance can take a few seconds.
     state.renderer?.collapse();
-    await setGraphMode('all');
+    await setGraphMode('overview');
   });
   $('reset-view').addEventListener('click', async () => {
     closeAnswer();
     state.newIds = new Set();
-    state.graphMode = 'all';
+    state.graphMode = 'overview';
     state.drilledInto = null;
     state.focused = null;
     await setView('graph');
@@ -1085,6 +1190,13 @@ function wireEvents() {
   for (const tab of document.querySelectorAll('.view-tab')) {
     tab.addEventListener('click', () => setView(tab.dataset.view));
   }
+
+  $('graph-limit').addEventListener('change', (e) => {
+    state.graphLimit = Number(e.target.value) || 1500;
+    try { localStorage.setItem('graphrag.limit', String(state.graphLimit)); } catch {}
+    if (state.graphMode === 'all') refreshGraph();
+  });
+  $('new-conversation').addEventListener('click', newConversation);
 
   $('isolated-toggle').addEventListener('click', (e) => {
     state.showIsolated = !state.showIsolated;
