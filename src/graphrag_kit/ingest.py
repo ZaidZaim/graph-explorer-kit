@@ -21,6 +21,7 @@ import asyncio
 import sys
 import time
 from pathlib import Path
+from uuid import uuid4
 
 from neo4j_graphrag.components.resolver import SinglePropertyExactMatchResolver
 from neo4j_graphrag.components.text_splitters.fixed_size_splitter import FixedSizeSplitter
@@ -98,7 +99,7 @@ def discover_documents(directory: Path) -> list[Path]:
     return sorted(p for p in directory.rglob("*") if p.suffix.lower() in SUPPORTED_SUFFIXES)
 
 
-def evidence_rollup_query(levels: tuple[str, ...]) -> str:
+def evidence_rollup_query(spec: ProjectSpec, where: str | None) -> str:
     """Cypher that rolls each entity up to its strongest observed evidence level.
 
     Run BEFORE resolution, on purpose. apoc.refactor.mergeNodes is called with
@@ -107,18 +108,26 @@ def evidence_rollup_query(levels: tuple[str, ...]) -> str:
     ends up with whichever the merge happened to pick. Writing the rolled-up
     value onto every duplicate first means whichever node survives already
     carries the right answer, and evidence_levels keeps the full observed set.
+
+    The candidate filter and exact-name/label grouping match the resolver.
+    In particular, normalization must not modify adopted records that resolution
+    would leave alone. Call only for projects that grade evidence.
     """
+    levels = spec.evidence_levels
     ordered = ", ".join(repr(level) for level in levels)
-    fallback = repr(levels[len(levels) // 2])
+    fallback = repr(levels[-1])
+    prop = "`" + spec.evidence_property.replace("`", "``") + "`"
     return f"""
-    MATCH (n:__Entity__) WHERE n.name IS NOT NULL
-    WITH toLower(trim(n.name)) AS key,
-         head([l IN labels(n) WHERE NOT l IN ['__Entity__', '__KGBuilder__']]) AS label,
-         collect(n) AS dupes
+    MATCH (entity:__Entity__) {where or ''}
+    WITH entity WHERE entity.name IS NOT NULL
+    UNWIND labels(entity) AS label
+    WITH entity, label WHERE NOT label IN ['__Entity__', '__KGBuilder__']
+    WITH entity.name AS key, label, collect(entity) AS dupes
     WITH dupes,
-         [s IN [{ordered}] WHERE any(d IN dupes WHERE d.status = s)] AS observed
+         [s IN [{ordered}] WHERE any(d IN dupes
+             WHERE d.{prop} = s OR s IN coalesce(d.evidence_levels, []))] AS observed
     FOREACH (d IN dupes |
-        SET d.status = coalesce(head(observed), d.status, {fallback}),
+        SET d.{prop} = coalesce(head(observed), d.{prop}, {fallback}),
             d.evidence_levels = observed
     )
     RETURN count(*) AS groups
@@ -213,7 +222,8 @@ def resolution_filter(spec: ProjectSpec, sources: list[str] | None) -> str | Non
         # adopted one.
         placeholders = ", ".join(repr(n.lower()) for n in spec.placeholder_names)
         clauses.append(f"NOT toLower(trim(entity.name)) IN [{placeholders}]")
-    if sources is None and spec.cross_document_labels is not None:
+    across_documents = sources is None or len(sources) > 1 or spec.owns_graph
+    if across_documents and spec.cross_document_labels is not None:
         # Cross-document merges only for labels whose name is an identity, and
         # only for names with a capital or a digit in them: "USCENTCOM" and
         # "SU-27" are names, "the object" and "radar" are descriptions that
@@ -227,12 +237,23 @@ def resolution_filter(spec: ProjectSpec, sources: list[str] | None) -> str | Non
             condition = f"d.project = {spec.key!r}"
         else:
             quoted = ", ".join(repr(name) for name in sources)
-            condition = f"d.`{lex.source_name_properties[0]}` IN [{quoted}]"
+            condition = (
+                f"d.project = {spec.key!r} AND "
+                f"d.`{lex.source_name_properties[0]}` IN [{quoted}]"
+            )
         clauses.insert(
             0,
             f"EXISTS {{ (entity)-[:{lex.entity_to_chunk}]->"
             f"(:`{lex.chunk_label}`)-[:{lex.chunk_to_source}]->"
             f"(d:`{lex.source_label}`) WHERE {condition} }}",
+        )
+        # A record shared with an adopted source is still not ours to rewrite
+        # or merge merely because a new project document also references it.
+        clauses.append(
+            f"NOT EXISTS {{ (entity)-[:{lex.entity_to_chunk}]->"
+            f"(:`{lex.chunk_label}`)-[:{lex.chunk_to_source}]->"
+            f"(foreign:`{lex.source_label}`) "
+            f"WHERE foreign.project IS NULL OR foreign.project <> {spec.key!r} }}"
         )
     if not clauses:
         return None
@@ -259,8 +280,8 @@ def ingested_sources(
     return {r["name"] for r in records}
 
 
-def remove_source(spec: ProjectSpec, driver, database: str, name: str) -> dict:
-    """Delete one source file's contribution so it can be ingested again cleanly.
+def remove_source(spec: ProjectSpec, driver, database: str, *, ingestion_id: str) -> dict:
+    """Delete only the failed ingestion attempt's contribution.
 
     Called when a document fails part-way through a batch. The writer commits in
     batches, so a failure can leave a source node with some chunks and some
@@ -269,10 +290,13 @@ def remove_source(spec: ProjectSpec, driver, database: str, name: str) -> dict:
     chunk they came from belongs to this source — an agency also named in
     another document stays.
     """
+    if not ingestion_id:
+        raise ValueError("An ingestion_id is required for cleanup")
     lex = spec.lexical
     records, _, _ = driver.execute_query(
         f"""
-        MATCH (d:`{lex.source_label}`) WHERE d.`{lex.source_name_properties[0]}` = $name
+        MATCH (d:`{lex.source_label}`)
+        WHERE d.ingestion_id = $ingestion_id AND d.project = $project
         OPTIONAL MATCH (c:`{lex.chunk_label}`)-[:{lex.chunk_to_source}]->(d)
         WITH d, collect(c) AS chunks
         OPTIONAL MATCH (e:__Entity__)-[:{lex.entity_to_chunk}]->(c) WHERE c IN chunks
@@ -288,9 +312,10 @@ def remove_source(spec: ProjectSpec, driver, database: str, name: str) -> dict:
         RETURN size(chunks) AS chunks, size(orphaned) AS entities
         """,
         database_=database,
-        name=name,
+        ingestion_id=ingestion_id,
+        project=spec.key,
     )
-    return dict(records[0]) if records else {"chunks": 0, "entities": 0}
+    return {key: sum(r[key] for r in records) for key in ("chunks", "entities")}
 
 
 async def ingest_files(
@@ -338,6 +363,7 @@ async def ingest_files(
     async def run_one(index: int, path: Path) -> None:
         pipeline = await free.get()
         started = time.monotonic()
+        ingestion_id = str(uuid4())
         try:
             # Re-checked per document, not once up front: two workers sharing a
             # corpus — one on each model deployment, say — must not both write
@@ -350,7 +376,11 @@ async def ingest_files(
             report(f"[{index}/{len(paths)}] reading {path.name}")
             await pipeline.run_async(
                 file_path=str(path),
-                document_metadata={"source": path.name, "project": spec.key},
+                document_metadata={
+                    "source": path.name,
+                    "project": spec.key,
+                    "ingestion_id": ingestion_id,
+                },
             )
             succeeded.append(path)
             report(f"[{index}/{len(paths)}] done {path.name} in {time.monotonic() - started:.0f}s")
@@ -358,7 +388,9 @@ async def ingest_files(
             if not continue_on_error:
                 raise
             failed.append((path, f"{type(exc).__name__}: {str(exc)[:200]}"))
-            removed = await asyncio.to_thread(remove_source, spec, driver, database, path.name)
+            removed = await asyncio.to_thread(
+                remove_source, spec, driver, database, ingestion_id=ingestion_id
+            )
             report(
                 f"[{index}/{len(paths)}] FAILED {path.name}: {type(exc).__name__}: "
                 f"{str(exc)[:200]} (removed {removed['chunks']} chunks, "
@@ -368,12 +400,6 @@ async def ingest_files(
             free.put_nowait(pipeline)
 
     await asyncio.gather(*(run_one(i + 1, path) for i, path in enumerate(paths)))
-
-    if spec.grades_evidence:
-        records, _, _ = driver.execute_query(
-            evidence_rollup_query(spec.evidence_levels), database_=database
-        )
-        report(f"normalised evidence levels across {records[0]['groups']} entity groups")
 
     stats: dict = {"succeeded": len(succeeded), "failed": [f"{p.name}: {why}" for p, why in failed]}
     if resolve_entities:
@@ -402,7 +428,7 @@ async def resolve(
         report(f"resolving duplicates within each of {len(names)} document(s)")
         candidates = merged = 0
         for name in names:
-            stats = await _run_resolver(driver, database, resolution_filter(spec, [name]))
+            stats = await _run_resolver(spec, driver, database, resolution_filter(spec, [name]))
             candidates += stats["candidates"]
             merged += stats["after_merge"]
         report(f"{candidates} candidates -> {merged} nodes after merge")
@@ -419,12 +445,14 @@ async def resolve(
         report("resolving duplicate entities")
     else:
         report(f"resolving duplicates within the {len(names)} new document(s)")
-    stats = await _run_resolver(driver, database, where)
+    stats = await _run_resolver(spec, driver, database, where)
     report(f"{stats['candidates']} candidates -> {stats['after_merge']} nodes after merge")
     return stats
 
 
-async def _run_resolver(driver, database: str, where: str | None) -> dict:
+async def _run_resolver(spec: ProjectSpec, driver, database: str, where: str | None) -> dict:
+    if spec.grades_evidence:
+        driver.execute_query(evidence_rollup_query(spec, where), database_=database)
     resolver = SinglePropertyExactMatchResolver(
         driver,
         filter_query=where,
@@ -537,7 +565,10 @@ def main() -> int:
     spec = load_project()
     parser = argparse.ArgumentParser(description=f"Build the {spec.title} knowledge graph.")
     parser.add_argument("paths", nargs="*", type=Path, help="Files to ingest.")
-    parser.add_argument("--no-resolve", action="store_true", help="Skip entity resolution.")
+    parser.add_argument(
+        "--no-resolve", action="store_true",
+        help="Defer evidence normalization and entity resolution.",
+    )
     parser.add_argument(
         "--skip-ingested",
         action="store_true",

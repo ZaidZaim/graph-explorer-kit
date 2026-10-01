@@ -4,7 +4,9 @@ A reusable GraphRAG scaffold on Neo4j, built on
 [`neo4j-graphrag`](https://github.com/neo4j/neo4j-graphrag-python). Point it at a
 folder of documents and a schema; get a knowledge graph, five retrieval strategies,
 an agent that chooses between them, and a browser explorer that answers questions
-**and shows the subgraph the answer came from**.
+**and shows related graph context alongside the answer**. The visualization can
+use a separate lookup; it is not an exact trace of the evidence used to generate
+each claim. See the retrieved context and source documents when checking an answer.
 
 ```
 projects/<name>/data ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_DOCUMENT]->(:Document)
@@ -13,7 +15,7 @@ projects/<name>/data ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_DOCUME
                                                         │
                               HybridCypherRetriever ────┴──── Agent Framework agent
                                                         ▼
-                                              answer + evidence subgraph
+                                              answer + related graph context
 ```
 
 ## Getting started
