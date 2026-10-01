@@ -27,6 +27,32 @@ projects/<name>/data/*.md ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_D
                                             answer + evidence subgraph
 ```
 
+## Getting started
+
+You need [`uv`](https://docs.astral.sh/uv/) (Python 3.10+), a Neo4j 5.23+ database
+with APOC (local Docker or [Aura](https://console.neo4j.io)), and one chat plus one
+embedding model (Microsoft Foundry or OpenAI).
+
+```bash
+git clone https://github.com/ZaidZaim/demo-neo4j-GraphRAG-py.git
+cd demo-neo4j-GraphRAG-py
+git checkout main
+uv sync
+cp .env.example .env             # set GRAPHRAG_PROJECT=projects.example, NEO4J_*, and the model block
+docker compose up -d             # skip if .env points at Aura
+az login                         # Foundry only; or LLM_PROVIDER=openai + OPENAI_API_KEY
+```
+
+```bash
+uv run graphrag-setup            # vector, fulltext and range indexes
+uv run graphrag-ingest           # chunk, embed, extract, resolve
+uv run graphrag-serve
+```
+
+Open <http://localhost:8000>. Prefer the terminal? `uv run graphrag-ask "…"` or
+`uv run graphrag-agent --chat`. Foundry deployments, Aura, OCR and every flag are
+under **Setup** and **Run** in the engine manual below.
+
 ## Why a graph
 
 Retrieval over embeddings finds the passages that sound like your question.
