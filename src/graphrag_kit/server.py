@@ -3,10 +3,10 @@
 The interesting endpoint is POST /api/ask. It does two things with one question:
 
   1. answers it through the GraphRAG pipeline, and
-  2. returns the exact subgraph the answer was drawn from,
+  2. returns related graph context from a separate lookup,
 
-so the front-end can light up the evidence instead of asking you to trust a
-paragraph of prose. Step 2 re-runs the vector/fulltext lookup itself rather than
+so the front-end can help explore the question's neighborhood. This is not an
+exact provenance trace. Step 2 re-runs the vector/fulltext lookup rather than
 parsing GraphRAG's context string, because the retriever hands back formatted
 text and the front-end needs element IDs.
 
@@ -17,8 +17,8 @@ handed to a worker thread first, so the retrieval rings reach the browser while
 the model is still writing.
 
 Both endpoints also serve the Microsoft Agent Framework agent, addressed as one
-more entry in the retriever list. Its evidence subgraph needs no second lookup:
-the agent's tools record what they read as they go.
+more entry in the retriever list. Its trail combines tool-recorded IDs with
+separate document-search lookups; tools without IDs may need a fallback lookup.
 
 Two endpoints exist for understanding the graph rather than querying it:
 GET /api/schema returns the project's schema as a graph — the POLE model itself,
@@ -951,8 +951,8 @@ CHUNK_EXCERPT = 180
 def retrieved_chunks(question: str, top_k: int) -> list[dict]:
     """The chunks the hybrid lookup actually returns, as graph nodes.
 
-    These are the first thing the answer stands on, so they are the first ring
-    the browser draws — before the model has written a word.
+    This independent lookup provides the first ring the browser draws while the
+    model works. Its chunks need not match the selected retriever's answer context.
     """
     project = spec()
     lex = project.lexical

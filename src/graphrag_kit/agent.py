@@ -10,9 +10,10 @@ This module hands the retrievers to an agent as tools and lets the model choose,
 call more than one, and call again after reading the first result. The retrieval
 itself is unchanged — same indexes, same graph-expansion query, same graph.
 
-Every tool that touches entities records their element IDs on an `EvidenceTrail`,
-so the caller can still light up exactly the subgraph the answer came from — here
-the subgraph the agent actually read, rather than a re-run of the lookup.
+The `EvidenceTrail` collects tool calls and related entity IDs for visualization.
+Entity lookup records its IDs directly; document search performs another lookup
+for IDs, and Cypher/overview tools record only their calls. It is related context,
+not an exact provenance trace of each answer claim.
 
 API notes for the 2026 Agent Framework release, which renamed a lot:
 `ChatAgent` -> `Agent`, `chat_client=` -> `client=`, `@ai_function` -> `@tool`,

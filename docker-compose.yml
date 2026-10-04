@@ -3,8 +3,8 @@ services:
     image: neo4j:2025.10-community
     container_name: graphrag-neo4j
     ports:
-      - "7474:7474"   # Browser
-      - "7687:7687"   # Bolt
+      - "127.0.0.1:7474:7474"   # Browser, local machine only
+      - "127.0.0.1:7687:7687"   # Bolt, local machine only
     environment:
       NEO4J_AUTH: neo4j/graphrag-demo
       # APOC is required: the entity resolver calls apoc.refactor.mergeNodes.

@@ -53,8 +53,8 @@ build-backend = "hatchling.build"
 packages = ["src/graphrag_kit", "projects"]
 
 [tool.pytest.ini_options]
-# The tests cover the pure parts — the Cypher the engine builds from a spec, and
-# the spec's own invariants. Nothing here touches a database or a model.
+# Most tests need no services. Neo4j integration regressions opt in through
+# GRAPHRAG_TEST_URI and GRAPHRAG_TEST_PASSWORD; they never call a model.
 testpaths = ["tests"]
 
 [tool.ruff]

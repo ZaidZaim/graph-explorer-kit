@@ -5,8 +5,9 @@ A reusable GraphRAG scaffold on Neo4j, built on the official
 
 Point it at a folder of documents and a schema; get back a knowledge graph, five
 retrieval strategies, an agent that chooses between them, a terminal client, and an
-interactive browser explorer that answers questions **and shows you the subgraph
-the answer came from**.
+interactive browser explorer that answers questions **and shows related graph
+context**. The picture may come from a separate lookup; it is not an exact
+provenance trace of the answer.
 
 It also reads graphs it did not build. Point the same engine at a graph from
 Neo4j Document Intelligence or another importer, describe how that graph names
@@ -24,7 +25,7 @@ projects/<name>/data/*.md ──► SimpleKGPipeline ──► (:Chunk)-[:FROM_D
                                     │                          (retrievers as tools, n calls)
                                     └─────────────────┬─────────────────────────┘
                                                       ▼
-                                            answer + evidence subgraph
+                                            answer + related graph context
 ```
 
 ## Getting started
@@ -307,10 +308,10 @@ reading the first result. Retrieval is unchanged: same indexes, same
 | `look_up_entity` | entity fulltext index | A name you already have, and its connections both ways. |
 | `graph_overview` | label/type counts | What kinds of things exist at all. |
 
-`search_documents` and `look_up_entity` record the element IDs of what they read on
-an `EvidenceTrail`, so the explorer still lights up the evidence — the entities the
-agent *actually read* plus one hop out from them, including entities reached by a
-name lookup that no chunk search returned. The other two record only the call: an
+`look_up_entity` records the element IDs it reads on an `EvidenceTrail`.
+`search_documents` uses a separate hybrid lookup to obtain related IDs, which
+need not match its answer context exactly. The visualization adds neighbors to
+these IDs. The other two tools record only the call: an
 answer drawn from `query_graph_with_cypher` or `graph_overview` alone leaves no IDs
 behind, and the highlight falls back to the ordinary hybrid lookup. `--show-tools`
 prints the same trail in the terminal.
@@ -464,11 +465,13 @@ Three views over the one graph, switched in the masthead:
 the rings come from a separate vector + fulltext lookup for the question
 (`retrieved_chunks` on the streaming path, `evidence_subgraph` on `/api/ask`),
 because retrievers hand back rendered text and the front-end needs element IDs.
-For `hybrid` and `hybrid-cypher` that hits the same two indexes that answered, so
-the rings match what was read. For `vector`, `vector-cypher` and especially
-`text2cypher` — which touches neither index — it is an independent lookup, so read
-the rings as *what this question matches in the corpus*, not *what this retriever
-read*. `agent` mode is the exception: its ring is the trail its tools actually left.
+Even for `hybrid` and `hybrid-cypher`, querying the same indexes does not guarantee
+the same results: scoring and selection can differ. For `vector`, `vector-cypher`
+and especially `text2cypher` — which touches neither index — the methods also
+differ. Read the rings as *related graph context*. Agent mode combines direct
+lookup IDs with separate document-search IDs and may fall back to hybrid search
+when its tools return no IDs. Check the retrieved context and source documents
+to verify an answer; neither mode traces individual claims to exact graph nodes.
 
 The renderer is a dependency-free canvas force layout. NVL is wired up too and
 available at `?renderer=nvl`, but it is not the default: it ships ESM-only, so it
@@ -496,7 +499,7 @@ also the shortest path to putting your own front-end on the graph:
 | `DELETE /api/conversations/{id}` | Forget a conversation: its messages, its reasoning traces, and the agent holding it. |
 | `GET /api/documents` | The corpus behind the graph: each source file with its passage and record counts. |
 | `POST /api/documents` | **Extend the graph.** Multipart upload; runs the same pipeline, schema and extraction rules over the new file and streams stages as SSE, ending with the subgraph it added. |
-| `POST /api/ask` | Answer, retrieved context, and evidence subgraph, as one JSON body. |
+| `POST /api/ask` | Answer, retrieved context, and related graph context (`subgraph`), as one JSON body. |
 | `POST /api/ask/stream` | The same work as Server-Sent Events, one event per stage. |
 
 Both ask routes take the same body — `retriever`, `top_k` and `session_id` are
@@ -655,20 +658,25 @@ strongest-first, and the project names them in its `evidence_levels` (default:
 know?" as distinct from "what is being said?"
 
 Because an entity can be asserted at different levels in different documents, a
-rollup pass runs **before** entity resolution and writes the strongest observed
-level onto every duplicate, keeping the full observed set in `evidence_levels`.
+rollup pass runs **immediately before each scoped resolution pass** and writes the
+strongest observed level onto eligible exact-name/label duplicates, keeping the
+observed set in `evidence_levels`. It uses the same ownership, placeholder, and
+identity-label filters as resolution and honors `evidence_property`. Records
+linked to sources outside an adopted project's ownership are excluded.
+`--no-resolve` defers both rollup and merging until a later resolution pass.
 Without it, `apoc.refactor.mergeNodes` — which is called with
 `properties: 'discard'` — keeps whichever value it happens to hit first, and a
 court-documented fact can come out the far side marked as a rumour.
 
-An entity the extractor left unrated is not dropped, but it is not neutral either.
-Retrieval context tags it `[unrated]`, while the explorer's projection, filters and
-counts all read `coalesce(n.status, 'reported')` — so on screen it *becomes*
-`reported`. That is a trap if you rename the levels: a project whose
-`evidence_levels` are `("high", "low")` has no bucket called `reported`, so every
-ungraded entity falls outside every filter and disappears from the explorer, with no
-error and a count of zero. Either keep `reported` in the tuple, or write extraction
-rules that grade everything.
+Failed batch cleanup uses a unique `ingestion_id` stored on each new source node,
+plus the project key. A previous upload, another project, or an adopted document
+with the same filename is not a cleanup target. Existing documents without this
+ID remain readable; there is no filename-based fallback for deleting them.
+
+An entity the extractor left unrated falls back to the weakest configured level
+in the shared context/display expressions and during normalization. This is a
+conservative fallback, not a new source assertion. Node-level grades also do not
+establish the evidence level of every relationship involving that node.
 
 ## Starting over
 
